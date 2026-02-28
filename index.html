@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>策略回测工作台 (浅色版)</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap"
+        rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+        rel="stylesheet" />
+    <script id="tailwind-config">
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#135bec",
+                        "background-light": "#f8fafc", "background-dark": "#ffffff", "surface-light": "#ffffff",
+                        "border-light": "#e2e8f0",
+                        "text-main": "#0f172a",
+                        "text-muted": "#64748b",
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"],
+                        "mono": ["ui-monospace", "SFMono-Regular", "Menlo", "Monaco", "Consolas", "Liberation Mono", "Courier New", "monospace"]
+                    },
+                    borderRadius: { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" },
+                },
+            },
+        }
+    </script>
+    <style>
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+
+<body class="bg-background-light text-text-main font-display min-h-screen flex flex-col overflow-hidden">
+    <header
+        class="flex items-center justify-between whitespace-nowrap border-b border-solid border-border-light px-6 py-3 bg-white z-20 shrink-0 shadow-sm">
+        <div class="flex items-center gap-8">
+            <div class="flex items-center gap-3 text-text-main">
+                <div class="size-8 text-primary">
+                    <span class="material-symbols-outlined !text-3xl">query_stats</span>
+                </div>
+                <h2 class="text-xl font-bold leading-tight tracking-[-0.015em]">策略回测工作台</h2>
+            </div>
+            <nav class="hidden md:flex items-center gap-6">
+                <a class="text-text-muted hover:text-primary text-sm font-medium transition-colors" href="#">仪表盘</a>
+                <a class="text-primary text-sm font-medium" href="#">策略库</a>
+            </nav>
+        </div>
+        <div class="flex items-center gap-4">
+            <div
+                class="hidden sm:flex w-64 items-center rounded-lg bg-slate-100 border border-transparent focus-within:border-primary transition-colors focus-within:bg-white focus-within:ring-2 focus-within:ring-primary/20">
+                <div class="pl-3 text-slate-400 flex items-center justify-center">
+                    <span class="material-symbols-outlined text-xl">search</span>
+                </div>
+                <input
+                    class="w-full bg-transparent border-none text-sm text-text-main placeholder:text-slate-400 focus:ring-0 h-9"
+                    placeholder="搜索策略..." />
+            </div>
+            <button class="flex items-center justify-center text-text-muted hover:text-primary transition-colors">
+                <span class="material-symbols-outlined">notifications</span>
+            </button>
+            <div class="size-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs cursor-pointer border border-primary/20"
+                title="用户资料">
+                JD
+            </div>
+        </div>
+    </header>
+    <main class="flex flex-1 overflow-hidden">
+        <aside
+            class="w-80 flex flex-col border-r border-border-light bg-white overflow-y-auto shrink-0 custom-scrollbar">
+            <div class="p-5 border-b border-border-light bg-slate-50/50">
+                <h3 class="text-lg font-bold text-text-main mb-1" id="strategy-title">策略配置</h3>
+                <p class="text-xs text-text-muted" id="strategy-desc">定义您的交易逻辑</p>
+            </div>
+            <div class="p-5 flex flex-col gap-6">
+
+                <!-- 策略选择 -->
+                <div class="flex flex-col gap-2">
+                    <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">选择策略模型</label>
+                    <div class="relative">
+                        <select id="strategy-selector"
+                            class="w-full rounded-lg border border-slate-300 bg-white text-text-main text-sm h-10 pl-3 pr-10 focus:ring-2 focus:ring-primary focus:border-transparent appearance-none shadow-sm bg-none font-medium">
+                            <option value="rsv">RSV背离+缩量轮动策略</option>
+                            <option value="ma">5日强平动量策略</option>
+                            <option value="brick">砖型图打分策略</option>
+                        </select>
+                        <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                            <span class="material-symbols-outlined text-sm">expand_more</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex flex-col gap-2">
+                    <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">选股范围</label>
+                    <div class="relative">
+                        <select
+                            class="w-full rounded-lg border border-slate-300 bg-white text-text-main text-sm h-10 pl-3 pr-10 focus:ring-2 focus:ring-primary focus:border-transparent appearance-none shadow-sm bg-none">
+                            <option>全A股</option>
+                            <option>沪深300</option>
+                            <option>中证500</option>
+                            <option>创业板</option>
+                            <option>科创板</option>
+                        </select>
+                        <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                            <span class="material-symbols-outlined text-sm">expand_more</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Brick 策略参数配置面版 -->
+                <div id="strategy-params-brick" style="display: none;" class="flex flex-col gap-6">
+                    <div class="flex flex-col gap-2">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">参数设置</label>
+                        <div class="space-y-2">
+                            <details class="group rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
+                                open="">
+                                <summary
+                                    class="flex cursor-pointer items-center justify-between px-3 py-2 select-none hover:bg-slate-100 transition-colors">
+                                    <span class="text-sm font-medium text-slate-700">配置参数</span>
+                                    <span
+                                        class="material-symbols-outlined text-slate-400 text-sm group-open:rotate-180 transition-transform">expand_more</span>
+                                </summary>
+                                <div class="px-3 pb-3 pt-1 border-t border-slate-200 border-dashed bg-white">
+                                    <div class="flex gap-2 items-center justify-between mt-2">
+                                        <label class="text-xs text-slate-700 font-bold whitespace-nowrap">持仓上限
+                                            (只)</label>
+                                        <input id="max-positions-brick"
+                                            class="w-16 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700 font-bold"
+                                            type="number" value="10" />
+                                    </div>
+                                </div>
+                            </details>
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-3">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">交易执行与目标</label>
+                        <div class="p-3 rounded-lg bg-primary/5 border border-primary/20 shadow-sm">
+                            <ul class="text-xs text-slate-700 space-y-2 list-disc list-inside">
+                                <li><strong>买入时机：</strong> 次日 09:30 开盘集合竞价买入，跳空 ≤ 0.5%</li>
+                                <li><strong>卖出逻辑：</strong> 14:55检查，若浮盈直接卖出，否则若满5天自动平仓</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MA 策略参数配置面版 -->
+                <div id="strategy-params-ma" style="display: none;" class="flex flex-col gap-6">
+                    <div class="flex flex-col gap-2">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">技术指标</label>
+                        <div class="space-y-2">
+                            <details class="group rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
+                                open="">
+                                <summary
+                                    class="flex cursor-pointer items-center justify-between px-3 py-2 select-none hover:bg-slate-100 transition-colors">
+                                    <span class="text-sm font-medium text-slate-700">移动平均线 (MA)</span>
+                                    <span
+                                        class="material-symbols-outlined text-slate-400 text-sm group-open:rotate-180 transition-transform">expand_more</span>
+                                </summary>
+                                <div class="px-3 pb-3 pt-1 border-t border-slate-200 border-dashed bg-white">
+                                    <div class="flex gap-2 mb-2 items-center">
+                                        <label class="text-xs text-slate-500 w-12">短周期</label>
+                                        <input
+                                            class="flex-1 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700"
+                                            type="number" value="5" />
+                                    </div>
+                                    <div class="flex gap-2 items-center">
+                                        <label class="text-xs text-slate-500 w-12">长周期</label>
+                                        <input
+                                            class="flex-1 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700"
+                                            type="number" value="20" />
+                                    </div>
+                                </div>
+                            </details>
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-3">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">交易逻辑</label>
+                        <div class="p-3 rounded-lg bg-green-50 border border-green-200 shadow-sm">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-xs font-bold text-green-700 flex items-center gap-1">
+                                    <span class="material-symbols-outlined text-sm">trending_up</span> 买入逻辑
+                                </span>
+                            </div>
+                            <p
+                                class="text-xs text-slate-700 leading-relaxed font-mono bg-white/50 p-2 rounded border border-green-100">
+                                IF MA_短期 &gt; MA_长期
+                            </p>
+                        </div>
+                        <div class="p-3 rounded-lg bg-red-50 border border-red-200 shadow-sm">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-xs font-bold text-red-700 flex items-center gap-1">
+                                    <span class="material-symbols-outlined text-sm">trending_down</span> 卖出逻辑
+                                </span>
+                            </div>
+                            <p
+                                class="text-xs text-slate-700 leading-relaxed font-mono bg-white/50 p-2 rounded border border-red-100">
+                                HOLD_DAYS &gt;= 5 OR PROFIT &gt; 0
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RSV 策略参数配置面版 -->
+                <div id="strategy-params-rsv" class="flex flex-col gap-6">
+                    <div class="flex flex-col gap-2">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">策略参数</label>
+                        <div class="space-y-2">
+                            <details class="group rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
+                                open="">
+                                <summary
+                                    class="flex cursor-pointer items-center justify-between px-3 py-2 select-none hover:bg-slate-100 transition-colors">
+                                    <span class="text-sm font-medium text-slate-700">参数设置</span>
+                                    <span
+                                        class="material-symbols-outlined text-slate-400 text-sm group-open:rotate-180 transition-transform">expand_more</span>
+                                </summary>
+                                <div class="px-3 pb-3 pt-1 border-t border-slate-200 border-dashed bg-white">
+                                    <div class="flex gap-2 mb-2 items-center justify-between">
+                                        <label class="text-xs text-slate-500 whitespace-nowrap">长RSV周期</label>
+                                        <input
+                                            class="w-16 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700"
+                                            type="number" value="21" />
+                                    </div>
+                                    <div class="flex gap-2 mb-2 items-center justify-between">
+                                        <label class="text-xs text-slate-500 whitespace-nowrap">短RSV周期</label>
+                                        <input
+                                            class="w-16 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700"
+                                            type="number" value="3" />
+                                    </div>
+                                    <div class="flex gap-2 mb-2 items-center justify-between">
+                                        <label class="text-xs text-slate-500 whitespace-nowrap">长期RSV &ge;</label>
+                                        <input
+                                            class="w-16 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700"
+                                            type="number" value="80" />
+                                    </div>
+                                    <div class="flex gap-2 items-center justify-between">
+                                        <label class="text-xs text-slate-500 whitespace-nowrap">短期RSV &le;</label>
+                                        <input
+                                            class="w-16 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700"
+                                            type="number" value="20" />
+                                    </div>
+                                    <div
+                                        class="flex gap-2 items-center justify-between mt-4 pt-3 border-t border-slate-100">
+                                        <label class="text-xs text-slate-700 font-bold whitespace-nowrap">持仓上限
+                                            (只)</label>
+                                        <input id="max-positions-rsv"
+                                            class="w-16 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700 font-bold"
+                                            type="number" value="2" />
+                                    </div>
+                                </div>
+                            </details>
+
+                            <details class="group rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
+                                open="">
+                                <summary
+                                    class="flex cursor-pointer items-center justify-between px-3 py-2 select-none hover:bg-slate-100 transition-colors">
+                                    <span class="text-sm font-medium text-slate-700">动量设置</span>
+                                    <span
+                                        class="material-symbols-outlined text-slate-400 text-sm group-open:rotate-180 transition-transform">expand_more</span>
+                                </summary>
+                                <div class="px-3 pb-3 pt-2 border-t border-slate-200 border-dashed bg-white">
+                                    <span
+                                        class="text-[11px] text-slate-500 leading-tight">按T日成交量/T-1日成交量比值排序，选最小的2只（缩量最显著）</span>
+                                </div>
+                            </details>
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-3">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">交易执行与目标</label>
+                        <div class="p-3 rounded-lg bg-primary/5 border border-primary/20 shadow-sm">
+                            <ul class="text-xs text-slate-700 space-y-2 list-disc list-inside">
+                                <li><strong>买入时机：</strong> T+1日 09:25 开盘等权买入</li>
+                                <li><strong>强制清仓：</strong> T+2日 14:55 全额卖出不留恋</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <script>
+                    const selector = document.getElementById('strategy-selector');
+                    const paramsMA = document.getElementById('strategy-params-ma');
+                    const paramsRSV = document.getElementById('strategy-params-rsv');
+                    const paramsBrick = document.getElementById('strategy-params-brick');
+                    const titleText = document.getElementById('strategy-title');
+                    const descText = document.getElementById('strategy-desc');
+
+                    selector.addEventListener('change', function () {
+                        if (this.value === 'ma') {
+                            paramsMA.style.display = 'flex';
+                            paramsRSV.style.display = 'none';
+                            paramsBrick.style.display = 'none';
+                            titleText.textContent = '5日强平动量';
+                            descText.textContent = '经典的均线动量与见好就收短线策略';
+                        } else if (this.value === 'brick') {
+                            paramsMA.style.display = 'none';
+                            paramsRSV.style.display = 'none';
+                            paramsBrick.style.display = 'flex';
+                            titleText.textContent = '砖型图打分策略';
+                            descText.textContent = 'KDJ深水超卖+突破MA60趋势的多因子共振短线策略';
+                        } else {
+                            paramsMA.style.display = 'none';
+                            paramsRSV.style.display = 'flex';
+                            paramsBrick.style.display = 'none';
+                            titleText.textContent = 'RSV背离轮动';
+                            descText.textContent = '捕捉底背离及缩量的超跌反弹短线策略';
+                        }
+                    });
+
+                    // 初始化触发
+                    selector.dispatchEvent(new Event('change'));
+                </script>
+            </div>
+        </aside>
+        <section class="flex-1 flex flex-col bg-slate-50 min-w-0 overflow-y-auto">
+            <div class="max-w-4xl w-full mx-auto p-8">
+                <h1 class="text-3xl font-black text-slate-900 mb-2">新建回测任务</h1>
+                <p class="text-slate-500 mb-8">配置您的回测环境参数。</p>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                    <div
+                        class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div class="flex items-center gap-3 mb-4 text-slate-900">
+                            <div class="p-2 bg-blue-50 rounded-lg text-primary border border-blue-100">
+                                <span class="material-symbols-outlined">calendar_month</span>
+                            </div>
+                            <h3 class="font-bold text-lg">回测周期</h3>
+                        </div>
+                        <div class="grid grid-cols-2 gap-5">
+                            <div class="group">
+                                <label
+                                    class="block text-xs font-bold text-slate-500 mb-1.5 flex items-center gap-1"><span
+                                        class="material-symbols-outlined text-[14px]">flight_takeoff</span>开始日期</label>
+                                <div class="relative">
+                                    <input id="start-date"
+                                        class="w-full h-11 px-4 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 text-sm font-medium focus:bg-white focus:ring-4 focus:ring-primary/10 focus:border-primary transition-all shadow-sm hover:border-slate-300 cursor-pointer outline-none"
+                                        type="date" value="2026-01-02" />
+                                </div>
+                            </div>
+                            <div class="group">
+                                <label
+                                    class="block text-xs font-bold text-slate-500 mb-1.5 flex items-center gap-1"><span
+                                        class="material-symbols-outlined text-[14px]">flight_land</span>结束日期</label>
+                                <div class="relative">
+                                    <input id="end-date"
+                                        class="w-full h-11 px-4 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 text-sm font-medium focus:bg-white focus:ring-4 focus:ring-primary/10 focus:border-primary transition-all shadow-sm hover:border-slate-300 cursor-pointer outline-none"
+                                        type="date" value="2026-02-27" />
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-4 flex gap-2 flex-wrap">
+                            <button
+                                class="px-3 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600 border border-slate-200">年初至今</button>
+                            <button
+                                class="px-3 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600 border border-slate-200">1年</button>
+                            <button
+                                class="px-3 py-1 text-xs font-medium bg-primary text-white rounded-full transition-colors shadow-sm ring-2 ring-primary ring-offset-2">3年</button>
+                            <button
+                                class="px-3 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600 border border-slate-200">5年</button>
+                            <button
+                                class="px-3 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600 border border-slate-200">最大</button>
+                        </div>
+                    </div>
+                    <div
+                        class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div class="flex items-center gap-3 mb-4 text-slate-900">
+                            <div class="p-2 bg-blue-50 rounded-lg text-primary border border-blue-100">
+                                <span class="material-symbols-outlined">attach_money</span>
+                            </div>
+                            <h3 class="font-bold text-lg">资金与费率</h3>
+                        </div>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-xs font-medium text-slate-500 mb-1">初始资金 (CNY)</label>
+                                <div class="relative">
+                                    <span
+                                        class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-serif">¥</span>
+                                    <input id="initial-capital"
+                                        class="w-full pl-7 rounded-lg bg-slate-50 border-slate-300 text-slate-900 text-sm font-mono focus:ring-primary focus:border-primary shadow-sm"
+                                        type="number" value="100000" />
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-500 mb-1">佣金费率</label>
+                                    <div class="relative">
+                                        <input
+                                            class="w-full pr-8 rounded-lg bg-slate-50 border-slate-300 text-slate-900 text-sm font-mono focus:ring-primary focus:border-primary shadow-sm"
+                                            type="text" value="0.03" />
+                                        <span
+                                            class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">%</span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-500 mb-1">滑点</label>
+                                    <div class="relative">
+                                        <input
+                                            class="w-full pr-8 rounded-lg bg-slate-50 border-slate-300 text-slate-900 text-sm font-mono focus:ring-primary focus:border-primary shadow-sm"
+                                            type="text" value="0.05" />
+                                        <span
+                                            class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">%</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div
+                    class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow mb-8">
+                    <div class="flex items-center gap-3 mb-4 text-slate-900">
+                        <div class="p-2 bg-blue-50 rounded-lg text-primary border border-blue-100">
+                            <span class="material-symbols-outlined">tune</span>
+                        </div>
+                        <h3 class="font-bold text-lg">基准与设置</h3>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-500 mb-1">业绩基准</label>
+                            <div class="relative">
+                                <select
+                                    class="w-full rounded-lg bg-slate-50 border-slate-300 text-slate-900 text-sm h-10 pl-3 pr-10 focus:ring-primary focus:border-primary appearance-none shadow-sm bg-none">
+                                    <option>000300.SH (沪深300)</option>
+                                    <option>000001.SH (上证指数)</option>
+                                    <option>399006.SZ (创业板指)</option>
+                                </select>
+                                <div
+                                    class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                                    <span class="material-symbols-outlined text-sm">expand_more</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-end gap-6 pb-2">
+                            <label class="flex items-center gap-3 cursor-pointer group">
+                                <div
+                                    class="relative inline-block w-10 h-6 transition duration-200 ease-in-out bg-slate-200 rounded-full border border-slate-300 group-hover:border-primary/50 peer-checked:bg-primary">
+                                    <input checked="" class="absolute w-full h-full opacity-0 z-10 cursor-pointer peer"
+                                        type="checkbox" />
+                                    <div
+                                        class="absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-all duration-200 ease-in-out peer-checked:translate-x-4 shadow-sm peer-checked:bg-primary border border-slate-300 peer-checked:border-white">
+                                    </div>
+                                </div>
+                                <span class="text-sm font-medium text-slate-700">包含分红</span>
+                            </label>
+                            <label class="flex items-center gap-3 cursor-pointer group">
+                                <div
+                                    class="relative inline-block w-10 h-6 transition duration-200 ease-in-out bg-slate-200 rounded-full border border-slate-300 group-hover:border-primary/50">
+                                    <input class="absolute w-full h-full opacity-0 z-10 cursor-pointer peer"
+                                        type="checkbox" />
+                                    <div
+                                        class="absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-all duration-200 ease-in-out peer-checked:translate-x-4 shadow-sm peer-checked:bg-primary border border-slate-300 peer-checked:border-white">
+                                    </div>
+                                </div>
+                                <span class="text-sm font-medium text-slate-700">详细日志</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div
+                    class="bg-gradient-to-r from-primary to-blue-600 rounded-xl p-6 text-white flex items-center justify-between shadow-xl shadow-primary/20 relative overflow-hidden group">
+                    <div
+                        class="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-20 mix-blend-overlay">
+                    </div>
+                    <div class="relative z-10">
+                        <h3 class="font-bold text-xl mb-1">准备就绪？</h3>
+                        <p class="text-blue-100 text-sm">预计回测耗时: ~45 秒</p>
+                    </div>
+                    <button
+                        class="relative z-10 bg-white text-primary hover:bg-blue-50 px-8 py-3 rounded-lg font-bold shadow-md transition-all hover:scale-105 active:scale-95 flex items-center gap-2">
+                        <span class="material-symbols-outlined">play_arrow</span>
+                        开始回测
+                    </button>
+                </div>
+            </div>
+        </section>
+        <aside class="hidden xl:flex w-96 flex-col border-l border-border-light bg-white shrink-0">
+            <div class="flex items-center justify-between p-4 border-b border-border-light bg-slate-50">
+                <div class="flex items-center gap-2 text-slate-600">
+                    <span class="material-symbols-outlined text-sm">terminal</span>
+                    <h3 class="font-mono text-sm font-semibold uppercase tracking-wider">运行日志</h3>
+                </div>
+                <div class="flex gap-2">
+                    <button class="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-600 transition-colors"
+                        title="清除">
+                        <span class="material-symbols-outlined text-sm">block</span>
+                    </button>
+                    <button class="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-600 transition-colors"
+                        title="下载">
+                        <span class="material-symbols-outlined text-sm">download</span>
+                    </button>
+                </div>
+            </div>
+            <div
+                class="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-2 bg-white custom-scrollbar border-b border-slate-100">
+                <div class="flex gap-2">
+                    <span class="text-slate-400 select-none">[10:42:01]</span>
+                    <span class="text-blue-600 font-bold">INFO</span>
+                    <span class="text-slate-700">系统初始化完成。就绪。</span>
+                </div>
+                <div class="flex gap-2">
+                    <span class="text-slate-400 select-none">[10:42:05]</span>
+                    <span class="text-blue-600 font-bold">INFO</span>
+                    <span class="text-slate-700">正在加载数据范围: 沪深300...</span>
+                </div>
+                <div class="flex gap-2">
+                    <span class="text-slate-400 select-none">[10:42:06]</span>
+                    <span class="text-orange-500 font-bold">WARN</span>
+                    <span class="text-slate-700">缺失数据: 600000.SH 日期 2021-02-14 (节假日)</span>
+                </div>
+                <div class="flex gap-2">
+                    <span class="text-slate-400 select-none">[10:42:08]</span>
+                    <span class="text-blue-600 font-bold">INFO</span>
+                    <span class="text-slate-700">数据加载成功。共 3400 条记录。</span>
+                </div>
+                <div class="flex gap-2">
+                    <span class="text-slate-400 select-none">[10:42:08]</span>
+                    <span class="text-purple-600 font-bold">DEBUG</span>
+                    <span class="text-slate-500">正在编译策略逻辑...</span>
+                </div>
+                <div class="flex gap-2 opacity-50">
+                    <span class="text-slate-400 select-none">...</span>
+                </div>
+                <div class="flex gap-2 mt-4">
+                    <span class="text-green-600 font-bold animate-pulse">_</span>
+                </div>
+            </div>
+            <div class="p-4 bg-slate-50">
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs text-slate-500 font-medium uppercase">系统状态</span>
+                    <div class="flex items-center gap-2">
+                        <span class="size-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]"></span>
+                        <span class="text-xs text-green-600 font-semibold">在线</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <p class="text-[10px] text-slate-500 uppercase mb-1">内存使用率</p>
+                        <div class="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden border border-slate-300/50">
+                            <div class="bg-primary h-full rounded-full" style="width: 32%"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <p class="text-[10px] text-slate-500 uppercase mb-1">CPU 负载</p>
+                        <div class="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden border border-slate-300/50">
+                            <div class="bg-yellow-500 h-full rounded-full" style="width: 12%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <script>
+        const startBtn = document.querySelector('button.relative.z-10.bg-white.text-primary.hover\\:bg-blue-50');
+        const logsContainer = document.querySelector('.flex-1.overflow-y-auto.p-4.font-mono.text-xs.space-y-2');
+
+        function appendLog(time, level, message) {
+            let levelColor = 'text-blue-600';
+            if (level === 'WARN') levelColor = 'text-orange-500';
+            if (level === 'ERROR') levelColor = 'text-red-600';
+            if (level === 'DEBUG') levelColor = 'text-purple-600';
+            if (level === 'RESULT' || level === 'SUCCESS' || level === 'INFO') {
+                if (level === 'SUCCESS' || level === 'RESULT') levelColor = 'text-green-600';
+                else levelColor = 'text-blue-600';
+            }
+
+            const logHtml = `
+        <div class="flex gap-2">
+            <span class="text-slate-400 select-none">[${time}]</span>
+            <span class="${levelColor} font-bold">${level}</span>
+            <span class="text-slate-700">${message}</span>
+        </div>`;
+
+            const cursor = logsContainer.querySelector('.animate-pulse');
+            if (cursor) cursor.closest('.flex').remove();
+
+            logsContainer.insertAdjacentHTML('beforeend', logHtml);
+
+            logsContainer.insertAdjacentHTML('beforeend', `
+        <div class="flex gap-2 mt-4 cursor-pulse">
+            <span class="text-green-600 font-bold animate-pulse">_</span>
+        </div>`);
+
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+        }
+
+        if (startBtn) {
+            startBtn.addEventListener('click', () => {
+                const startDate = document.getElementById('start-date').value;
+                const endDate = document.getElementById('end-date').value;
+                const strategy = document.getElementById('strategy-selector').value;
+                const initialCapital = document.getElementById('initial-capital').value || '100000';
+
+                let maxPositions = 5;
+                if (strategy === 'rsv') {
+                    maxPositions = document.getElementById('max-positions-rsv').value || '2';
+                } else if (strategy === 'brick') {
+                    maxPositions = document.getElementById('max-positions-brick').value || '10';
+                }
+
+                startBtn.disabled = true;
+                startBtn.innerHTML = '<span class="material-symbols-outlined animate-spin">sync</span> 正在为您跳转...';
+                window.location.href = `/report?start=1&start_date=${startDate}&end_date=${endDate}&strategy=${strategy}&initial_capital=${initialCapital}&max_positions=${maxPositions}`;
+            });
+        }
+    </script>
+</body>
+
+</html>

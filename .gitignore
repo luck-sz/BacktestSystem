@@ -1,0 +1,22 @@
+# 股票数据目录（体积过大，不纳入版本控制）
+all_stock_data/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# 虚拟环境
+venv/
+.env/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# 系统文件
+.DS_Store
+Thumbs.db
