@@ -365,18 +365,58 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="mt-4 flex gap-2 flex-wrap">
-                            <button
-                                class="px-3 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600 border border-slate-200">年初至今</button>
-                            <button
-                                class="px-3 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600 border border-slate-200">1年</button>
-                            <button
-                                class="px-3 py-1 text-xs font-medium bg-primary text-white rounded-full transition-colors shadow-sm ring-2 ring-primary ring-offset-2">3年</button>
-                            <button
-                                class="px-3 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600 border border-slate-200">5年</button>
-                            <button
-                                class="px-3 py-1 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600 border border-slate-200">最大</button>
+                        <div class="mt-4 grid grid-cols-4 gap-2" id="period-btns">
+                            <button data-period="ytd"
+                                class="period-btn py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600 border border-slate-200 w-full">年初至今</button>
+                            <button data-period="1y"
+                                class="period-btn py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600 border border-slate-200 w-full">1年</button>
+                            <button data-period="3y"
+                                class="period-btn py-1.5 text-xs font-medium bg-primary text-white rounded-full transition-colors shadow-sm ring-2 ring-primary ring-offset-2 w-full">3年</button>
+                            <button data-period="5y"
+                                class="period-btn py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600 border border-slate-200 w-full">5年</button>
                         </div>
+                        <script>
+                            (function () {
+                                function toDateStr(d) {
+                                    return d.toISOString().slice(0, 10);
+                                }
+                                function setActivePeriod(period) {
+                                    const today = new Date();
+                                    const endInput = document.getElementById('end-date');
+                                    const startInput = document.getElementById('start-date');
+                                    endInput.value = toDateStr(today);
+                                    if (period === 'ytd') {
+                                        const ytd = new Date(today.getFullYear(), 0, 1);
+                                        startInput.value = toDateStr(ytd);
+                                    } else if (period === '1y') {
+                                        const d = new Date(today); d.setFullYear(d.getFullYear() - 1);
+                                        startInput.value = toDateStr(d);
+                                    } else if (period === '3y') {
+                                        const d = new Date(today); d.setFullYear(d.getFullYear() - 3);
+                                        startInput.value = toDateStr(d);
+                                    } else if (period === '5y') {
+                                        const d = new Date(today); d.setFullYear(d.getFullYear() - 5);
+                                        startInput.value = toDateStr(d);
+                                    }
+                                    // 更新高亮样式
+                                    document.querySelectorAll('.period-btn').forEach(btn => {
+                                        if (btn.dataset.period === period) {
+                                            btn.className = 'period-btn py-1.5 text-xs font-medium bg-primary text-white rounded-full transition-colors shadow-sm ring-2 ring-primary ring-offset-2 w-full';
+                                        } else {
+                                            btn.className = 'period-btn py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-full transition-colors text-slate-600 border border-slate-200 w-full';
+                                        }
+                                    });
+                                }
+                                document.getElementById('period-btns').addEventListener('click', function (e) {
+                                    const btn = e.target.closest('.period-btn');
+                                    if (btn) setActivePeriod(btn.dataset.period);
+                                });
+                                // 页面初始化时触发一次3年默认
+                                window.addEventListener('DOMContentLoaded', function () {
+                                    setActivePeriod('3y');
+                                });
+                            })();
+                        </script>
                     </div>
                     <div
                         class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">

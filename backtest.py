@@ -1,352 +1,481 @@
-import os
-import pandas as pd
-import numpy as np
+"""
+backtest.py — 通用 A股横截面回测引擎
+
+支持策略：
+  - rsv   : RSV背离 + 缩量轮动（短期超跌反弹）
+  - ma    : 5日强平动量（MA金叉买入，盈利或满5天卖出）
+  - brick : 砖型图打分（KDJ超卖 + MA60趋势 + 砖型柱反转）
+"""
+
+from __future__ import annotations
+
 import asyncio
+import os
+from concurrent.futures import ProcessPoolExecutor
+from typing import Any, Callable, Coroutine
 
-def run_backtest(data_dir):
-    asyncio.run(_run_backtest_wrapper(data_dir))
+import numpy as np
+import pandas as pd
 
-async def _run_backtest_wrapper(data_dir):
-    async def print_callback(level, msg):
-        print(f"[{level}] {msg}")
-    await run_backtest_async(data_dir, print_callback)
+# ─────────────────────── 常量 ───────────────────────
+RENAME_MAP = {
+    "名称": "name",
+    "交易日期": "date",
+    "开盘价": "open",
+    "最高价": "high",
+    "最低价": "low",
+    "收盘价": "close",
+    "成交量(手)": "volume",
+}
 
-async def run_backtest_async(data_dir, log_callback, start_date="2026-01-02", end_date="2026-02-27", strategy="rsv", initial_capital=100000.0, max_positions=2):
+STRATEGY_NAMES = {
+    "rsv":   "RSV背离+缩量轮动策略",
+    "ma":    "5日强平动量策略",
+    "brick": "砖型图打分策略",
+}
+
+MIN_ROWS = 25  # 数据行数过少则跳过
+
+# ─────────────────────── 指标计算 ───────────────────────
+
+def _calc_rsv(df: pd.DataFrame) -> pd.DataFrame:
+    """RSV背离策略指标"""
+    low21   = df["low"].rolling(21, min_periods=1).min()
+    high21  = df["close"].rolling(21, min_periods=1).max()
+    df["rsv_long"]  = (df["close"] - low21)  / (high21 - low21  + 1e-9) * 100
+
+    low3    = df["low"].rolling(3, min_periods=1).min()
+    high3   = df["close"].rolling(3, min_periods=1).max()
+    df["rsv_short"] = (df["close"] - low3)   / (high3  - low3   + 1e-9) * 100
+
+    df["vol_ratio"] = df["volume"] / df["volume"].shift(1).replace(0, np.nan)
+    return df
+
+
+def _calc_ma(df: pd.DataFrame) -> pd.DataFrame:
+    """MA金叉动量策略指标"""
+    df["sma5"]  = df["close"].rolling(5).mean()
+    df["sma20"] = df["close"].rolling(20).mean()
+    df["buy_signal"] = (
+        (df["sma5"] >  df["sma20"]) &
+        (df["sma5"].shift(1) <= df["sma20"].shift(1))
+    )
+    return df
+
+
+def _calc_brick(df: pd.DataFrame) -> pd.DataFrame:
+    """砖型图打分策略指标（通达信风格近似）"""
+    df["ma60"] = df["close"].rolling(60).mean()
+
+    low9  = df["low"].rolling(9).min()
+    high9 = df["high"].rolling(9).max()
+    diff9 = (high9 - low9).clip(lower=0.001)
+    rsv   = (df["close"] - low9) / diff9 * 100
+    k     = rsv.ewm(alpha=1 / 3, adjust=False).mean()
+    d     = k.ewm(alpha=1 / 3, adjust=False).mean()
+    df["j"] = 3 * k - 2 * d
+
+    hhv4   = df["high"].rolling(4).max()
+    llv4   = df["low"].rolling(4).min()
+    diff4  = (hhv4 - llv4).clip(lower=0.001)
+
+    var1a  = (hhv4 - df["close"]) / diff4 * 100 - 90
+    var2a  = var1a.ewm(alpha=1 / 4, adjust=False).mean() + 100
+    var3a  = (df["close"] - llv4) / diff4 * 100
+    var4a  = var3a.ewm(alpha=1 / 6, adjust=False).mean()
+    var5a  = var4a.ewm(alpha=1 / 6, adjust=False).mean() + 100
+
+    v6a         = (var5a - var2a).fillna(0)
+    df["brick"] = np.where(v6a > 4, v6a - 4, 0.0)
+
+    b0 = df["brick"]
+    b1 = df["brick"].shift(1)
+    b2 = df["brick"].shift(2)
+
+    color_ok    = (b1 < b2) & (b0 > b1)
+    trend_ok    = df["close"] > df["ma60"]
+    oversold_ok = df["j"].shift(1).rolling(5).min() < 0
+    red_len     = b0 - b1
+    green_len   = b2 - b1
+    length_ok   = red_len > green_len
+
+    df["brick_score"] = red_len / (green_len + 0.001)
+    df["buy_signal"]  = color_ok & trend_ok & oversold_ok & length_ok
+    return df
+
+
+_INDICATOR_FUNCS = {
+    "rsv":   _calc_rsv,
+    "ma":    _calc_ma,
+    "brick": _calc_brick,
+}
+
+# ─────────────────────── 单文件加载（同步，用于 executor） ───────────────────────
+
+def _load_single_file(args: tuple) -> tuple[str, str, pd.DataFrame | None]:
     """
-    通用平台横截面回测引擎
-    支持：RSV背离+缩量轮动策略、5日强平动量策略
+    同步地加载并预处理单只股票 CSV。
+    返回 (stock_code, stock_name, df_or_None)
     """
-    if strategy == "ma":
-        await log_callback("INFO", f"=== [策略启动] 5日强平动量策略 ({start_date} 到 {end_date}) ===")
-    elif strategy == "brick":
-        await log_callback("INFO", f"=== [策略启动] 砖型图打分策略 ({start_date} 到 {end_date}) ===")
-    else:
-        await log_callback("INFO", f"=== [策略启动] RSV背离+缩量轮动策略 ({start_date} 到 {end_date}) ===")
-    
-    csv_files = []
-    for root, dirs, files in os.walk(data_dir):
+    file_path, strategy, start_ts, end_ts = args
+    stock_code = os.path.basename(file_path).replace(".csv", "")
+    calc_fn    = _INDICATOR_FUNCS.get(strategy)
+    if calc_fn is None:
+        return stock_code, "", None
+
+    try:
+        df = pd.read_csv(file_path)
+        if df.empty or len(df) < MIN_ROWS:
+            return stock_code, "", None
+
+        df.rename(columns=RENAME_MAP, inplace=True)
+        stock_name = str(df["name"].iloc[0]) if "name" in df.columns else stock_code
+
+        df["date"] = pd.to_datetime(df["date"].astype(str), errors="coerce")
+        df.dropna(subset=["date"], inplace=True)
+        df.sort_values("date", inplace=True)
+        df.reset_index(drop=True, inplace=True)
+
+        df = calc_fn(df)
+
+        # 必须在计算指标之后再做日期截取，保证滚动窗口完整
+        df = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
+        if df.empty:
+            return stock_code, stock_name, None
+
+        df.set_index("date", inplace=True)
+        return stock_code, stock_name, df
+
+    except Exception:
+        return stock_code, "", None
+
+
+# ─────────────────────── 主回测引擎 ───────────────────────
+
+LogCallback = Callable[[str, Any], Coroutine]
+
+
+async def run_backtest_async(
+    data_dir:        str,
+    log_callback:    LogCallback,
+    start_date:      str   = "2026-01-02",
+    end_date:        str   = "2026-02-27",
+    strategy:        str   = "rsv",
+    initial_capital: float = 100_000.0,
+    max_positions:   int   = 2,
+) -> dict | None:
+    """
+    异步横截面回测主函数。
+
+    参数
+    ----
+    data_dir        : 股票 CSV 数据目录
+    log_callback    : async (level: str, message: Any) -> None
+    start_date      : 回测开始日期 YYYY-MM-DD
+    end_date        : 回测结束日期 YYYY-MM-DD
+    strategy        : 策略名称 rsv / ma / brick
+    initial_capital : 初始资金（元）
+    max_positions   : 最大持仓数量（只）
+    """
+    strategy_label = STRATEGY_NAMES.get(strategy, strategy)
+    await log_callback("INFO", f"=== [策略启动] {strategy_label} ({start_date} 到 {end_date}) ===")
+
+    # ── 1. 扫描 CSV 文件列表 ──
+    csv_files: list[str] = []
+    for root, _, files in os.walk(data_dir):
         if "大盘" in root:
             continue
         for f in files:
-            if f.endswith('.csv') and f[:6].isdigit():
+            if f.endswith(".csv") and f[:6].isdigit():
                 csv_files.append(os.path.join(root, f))
-    
-    import datetime
-    start_dt = pd.to_datetime(start_date)
-    end_dt = pd.to_datetime(end_date)
-    
-    await log_callback("INFO", f"开始加载数据: 共发现 {len(csv_files)} 只个股数据，准备全市场回测...")
-    target_files = csv_files
-    total_files = len(target_files)
-    
-    all_dates = set()
-    stock_data = {}
-    stock_names = {}
-    
-    for idx, file_path in enumerate(target_files):
-        if idx % 100 == 0 and idx > 0:
-            await log_callback("DEBUG", f"仍在处理中: 已预加载并计算指标 {idx}/{total_files} 只股票...")
-            await asyncio.sleep(0.01)
-            
-        stock_code = os.path.basename(file_path).replace('.csv', '')
-        
-        try:
-            df = pd.read_csv(file_path)
-            if df.empty or len(df) < 25:
-                continue
-                
-            # 适配新的数据结构
-            rename_map = {
-                '名称': 'name',
-                '交易日期': 'date',
-                '开盘价': 'open',
-                '最高价': 'high',
-                '最低价': 'low',
-                '收盘价': 'close',
-                '成交量(手)': 'volume'
-            }
-            df.rename(columns=rename_map, inplace=True)
-            
-            if 'name' in df.columns:
-                stock_names[stock_code] = df['name'].iloc[0]
-            
-            df['date'] = pd.to_datetime(df['date'].astype(str))
-            df = df.sort_values(by='date').reset_index(drop=True)
-            
-            params_ok = False
-            if strategy == "rsv":
-                # RSV Long (21)
-                low_21 = df['low'].rolling(window=21, min_periods=1).min()
-                high_close_21 = df['close'].rolling(window=21, min_periods=1).max()
-                df['rsv_long'] = (df['close'] - low_21) / (high_close_21 - low_21 + 1e-9) * 100.0
-                
-                # RSV Short (3)
-                low_3 = df['low'].rolling(window=3, min_periods=1).min()
-                high_close_3 = df['close'].rolling(window=3, min_periods=1).max()
-                df['rsv_short'] = (df['close'] - low_3) / (high_close_3 - low_3 + 1e-9) * 100.0
-                
-                df['vol_ratio'] = df['volume'] / df['volume'].shift(1)
-                params_ok = True
-            elif strategy == "ma":
-                df['sma5'] = df['close'].rolling(window=5).mean()
-                df['sma20'] = df['close'].rolling(window=20).mean()
-                df['buy_signal'] = (df['sma5'] > df['sma20']) & (df['sma5'].shift(1) <= df['sma20'].shift(1))
-                params_ok = True
-            elif strategy == "brick":
-                df['ma60'] = df['close'].rolling(window=60).mean()
-                
-                low_9 = df['low'].rolling(window=9).min()
-                high_9 = df['high'].rolling(window=9).max()
-                diff_9 = (high_9 - low_9).replace(0, 0.001)
-                rsv = (df['close'] - low_9) / diff_9 * 100
-                k = rsv.ewm(alpha=1/3, adjust=False).mean()
-                d = k.ewm(alpha=1/3, adjust=False).mean()
-                df['j'] = 3 * k - 2 * d
-                
-                hhv4 = df['high'].rolling(window=4).max()
-                llv4 = df['low'].rolling(window=4).min()
-                diff4 = (hhv4 - llv4).replace(0, 0.001)
-                
-                var1a = (hhv4 - df['close']) / diff4 * 100 - 90
-                var2a = var1a.ewm(alpha=1/4, adjust=False).mean() + 100
-                
-                var3a = (df['close'] - llv4) / diff4 * 100
-                var4a = var3a.ewm(alpha=1/6, adjust=False).mean()
-                var5a = var4a.ewm(alpha=1/6, adjust=False).mean() + 100
-                
-                v6a = (var5a - var2a).fillna(0)
-                df['brick'] = np.where(v6a > 4, v6a - 4, 0.0)
-                
-                b_t0 = df['brick']
-                b_t1 = df['brick'].shift(1)
-                b_t2 = df['brick'].shift(2)
-                
-                color_ok = (b_t1 < b_t2) & (b_t0 > b_t1)
-                trend_ok = df['close'] > df['ma60']
-                oversold_ok = df['j'].shift(1).rolling(window=5).min() < 0
-                
-                red_len = b_t0 - b_t1
-                green_len = b_t2 - b_t1
-                length_ok = red_len > green_len
-                
-                df['brick_score'] = red_len / (green_len + 0.001)
-                df['buy_signal'] = color_ok & trend_ok & oversold_ok & length_ok
-                params_ok = True
-                
-            if not params_ok:
-                continue
-                
-            # Filter by date range AFTER computing rolling indicators
-            df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)]
-            if df.empty:
-                continue
-                
-            df.set_index('date', inplace=True)
-            stock_data[stock_code] = df
-            all_dates.update(df.index)
-        except Exception as e:
-            pass
 
-    sorted_dates = sorted(list(all_dates))
-    
-    trades = []
-    held_stocks = {} 
-    buy_list = []
-
-    daily_equity_curve = {}
-    partial_equity_updates = {}
-    current_equity = 1.0
-    
-    if len(sorted_dates) == 0:
-        await log_callback("WARN", "在指定的日期范围内没有可用数据...")
+    if not csv_files:
+        await log_callback("WARN", f"数据目录中未找到任何 CSV 文件：{data_dir}")
         return None
-        
+
+    total_files = len(csv_files)
+    await log_callback("INFO", f"开始加载数据: 共发现 {total_files} 只个股数据，准备全市场回测...")
+
+    start_ts = pd.Timestamp(start_date)
+    end_ts   = pd.Timestamp(end_date)
+    args_list = [(fp, strategy, start_ts, end_ts) for fp in csv_files]
+
+    # ── 2. 并发预加载 & 指标计算（使用进程池避免 GIL） ──
+    stock_data:  dict[str, pd.DataFrame] = {}
+    stock_names: dict[str, str]          = {}
+    all_dates:   set                     = set()
+
+    loop = asyncio.get_event_loop()
+    BATCH = 200  # 每批处理数量，兼顾内存与进度反馈
+
+    with ProcessPoolExecutor() as executor:
+        for batch_start in range(0, total_files, BATCH):
+            batch = args_list[batch_start: batch_start + BATCH]
+            results = await loop.run_in_executor(
+                executor,
+                _batch_load,
+                batch,
+            )
+            for code, name, df in results:
+                if df is not None:
+                    stock_data[code]  = df
+                    stock_names[code] = name
+                    all_dates.update(df.index)
+
+            loaded = min(batch_start + BATCH, total_files)
+            await log_callback("DEBUG", f"仍在处理中: 已预加载并计算指标 {loaded}/{total_files} 只股票...")
+            await asyncio.sleep(0)  # 让事件循环有机会推送 SSE
+
+    sorted_dates = sorted(all_dates)
+    if not sorted_dates:
+        await log_callback("WARN", "在指定的日期范围内没有可用数据，请检查数据目录或日期范围。")
+        return None
+
+    await log_callback("INFO", f"数据加载完毕，共 {len(stock_data)} 只股票参与回测，回测日历 {len(sorted_dates)} 个交易日。")
     await log_callback("INFO", "开始进行日级别横截面撮合与仿真...")
-    
-    for i in range(len(sorted_dates)):
-        current_date = sorted_dates[i]
+
+    # ── 3. 逐日撮合 ──
+    trades:               list[dict] = []
+    held_stocks:          dict[str, dict] = {}
+    buy_list:             list[str] = []
+    daily_equity_curve:   dict[str, float] = {}
+    partial_equity_updates: dict[str, float] = {}
+    current_equity = 1.0
+
+    total_days = len(sorted_dates)
+
+    for i, current_date in enumerate(sorted_dates):
         date_str = current_date.strftime("%Y-%m-%d")
-        
+
         if i % 10 == 0:
-            await log_callback("DEBUG", f"回测进行中: 正在撮合 {date_str} 的交易 ({i}/{len(sorted_dates)}天)...")
-            await asyncio.sleep(0.01)
-        
-        # 1. 开盘/集合竞价买入
-        bought_today = []
+            await log_callback("DEBUG", f"回测进行中: 正在撮合 {date_str} 的交易 ({i}/{total_days} 天)...")
+            await asyncio.sleep(0)
+
+        # ── 3a. 开盘买入 ──
+        bought_today: list[str] = []
         for stock in buy_list:
             if len(held_stocks) >= max_positions:
                 break
-            if stock not in held_stocks:
-                df = stock_data[stock]
-                if current_date in df.index:
-                    open_price = float(df.loc[current_date, 'open']) if strategy in ('rsv', 'brick') else float(df.loc[current_date, 'close'])
-                    
-                    if strategy == 'brick':
-                        prev_date = sorted_dates[i-1] if i > 0 else None
-                        if prev_date and prev_date in df.index:
-                            prev_close = float(df.loc[prev_date, 'close'])
-                            if (open_price / prev_close - 1) > 0.005:
-                                continue
+            if stock in held_stocks:
+                continue
+            df = stock_data.get(stock)
+            if df is None or current_date not in df.index:
+                continue
 
-                    if not np.isnan(open_price) and open_price > 0:
-                        # 初始资金为 initial_capital，随着收益曲线复利
-                        pos_value = (initial_capital * current_equity) / max_positions
-                        shares = int(pos_value / (open_price * 100)) * 100
-                        if shares == 0:
-                            shares = 100
-                        actual_cost = shares * open_price
-                        
-                        held_stocks[stock] = {
-                            'buy_date': current_date,
-                            'buy_price': open_price,
-                            'start_idx': i,
-                            'shares': shares,
-                            'buy_amount': actual_cost
-                        }
-                        bought_today.append(stock)
+            row = df.loc[current_date]
+            open_price = float(row.get("open", np.nan))
+
+            # 砖型图策略：过滤跳空高开 > 0.5%
+            if strategy == "brick" and i > 0:
+                prev_date = sorted_dates[i - 1]
+                if prev_date in df.index:
+                    prev_close = float(df.loc[prev_date, "close"])
+                    if prev_close > 0 and (open_price / prev_close - 1) > 0.005:
+                        continue
+
+            if np.isnan(open_price) or open_price <= 0:
+                continue
+
+            pos_value   = (initial_capital * current_equity) / max_positions
+            shares      = max(int(pos_value / (open_price * 100)) * 100, 100)
+            actual_cost = shares * open_price
+
+            held_stocks[stock] = {
+                "buy_date":   current_date,
+                "buy_price":  open_price,
+                "start_idx":  i,
+                "shares":     shares,
+                "buy_amount": actual_cost,
+            }
+            bought_today.append(stock)
+
         buy_list = []
-        
-        # 记录今日净值情况 (当日包含未卖出的老持仓和早盘新买入的新持仓)
+
+        # ── 3b. 当日净值更新 ──
         daily_ret_sum = 0.0
-        for stock in held_stocks:
-            df = stock_data[stock]
-            if current_date in df.index:
-                curr_close = float(df.loc[current_date, 'close'])
-                if stock in bought_today:
-                    buy_p = held_stocks[stock]['buy_price']
-                    ret = (curr_close - buy_p) / buy_p
+        n_positions   = len(held_stocks)
+
+        for stock, info in held_stocks.items():
+            df = stock_data.get(stock)
+            if df is None or current_date not in df.index:
+                continue
+            curr_close = float(df.loc[current_date, "close"])
+            if stock in bought_today:
+                ret = (curr_close - info["buy_price"]) / info["buy_price"]
+            elif i > 0:
+                prev_date = sorted_dates[i - 1]
+                if prev_date in df.index:
+                    prev_close = float(df.loc[prev_date, "close"])
+                    ret = (curr_close - prev_close) / prev_close if prev_close > 0 else 0.0
                 else:
-                    prev_date = sorted_dates[i-1]
-                    if prev_date in df.index:
-                        prev_close = float(df.loc[prev_date, 'close'])
-                        ret = (curr_close - prev_close) / prev_close
-                    else:
-                        ret = 0.0
-                daily_ret_sum += ret
-        
-        # 为了防除数0和保持基准，取目前实际持仓数量或者最大仓数量的占卜
-        active_pos = max(len(held_stocks), 1) if strategy == 'ma' else max_positions
-        port_daily_ret = daily_ret_sum / active_pos
-        current_equity *= (1 + port_daily_ret)
+                    ret = 0.0
+            else:
+                ret = 0.0
+            daily_ret_sum += ret
+
+        # 用实际持仓数量做分母（若空仓则分母为 max_positions 保证基准稳定）
+        divisor = n_positions if n_positions > 0 else max_positions
+        current_equity *= (1 + daily_ret_sum / divisor)
+
         rounded_eq = round((current_equity - 1) * 100, 4)
-        daily_equity_curve[date_str] = rounded_eq
+        daily_equity_curve[date_str]    = rounded_eq
         partial_equity_updates[date_str] = rounded_eq
-        
-        if len(partial_equity_updates) >= 20 or i == len(sorted_dates) - 1:
+
+        if len(partial_equity_updates) >= 20 or i == total_days - 1:
             await log_callback("EQUITY_UPDATE", partial_equity_updates)
             partial_equity_updates = {}
-            
-        # 2. 尾盘卖出判定
-        to_remove = []
+
+        # ── 3c. 尾盘卖出判定 ──
+        to_remove: list[str] = []
         for stock, info in held_stocks.items():
-            hold_days = i - info['start_idx']
-            df = stock_data[stock]
-            if current_date in df.index:
-                sell_price = float(df.loc[current_date, 'close'])
-                profit_pct = (sell_price - info['buy_price']) / info['buy_price'] * 100
-                
-                sell_reason = None
-                if strategy == "rsv":
-                    if hold_days >= 2:
-                        sell_reason = "持仓满2天尾盘卖出"
-                elif strategy == "ma":
-                    if profit_pct > 0.2:
-                        sell_reason = "盈利卖出(模拟14:55)"
-                    elif hold_days >= 5:
-                        sell_reason = "持仓满5天强制卖出"
-                elif strategy == "brick":
-                    if profit_pct > 0:
-                        sell_reason = "盈利卖出"
-                    elif hold_days >= 5:
-                        sell_reason = "持仓满5天强制卖出"
-                
-                if sell_reason:
-                    trade_data = {
-                        '代码': stock,
-                        '名称': stock_names.get(stock, stock),
-                        '买入日期': info['buy_date'].strftime("%Y-%m-%d"),
-                        '买入价': round(info['buy_price'], 2),
-                        '购买股数': info.get('shares', 0),
-                        '购买金额': round(info.get('buy_amount', 0), 2),
-                        '卖出日期': date_str,
-                        '卖出价': round(sell_price, 2),
-                        '持仓天数': hold_days if hold_days > 0 else 1,
-                        '收益率(%)': round(profit_pct, 2)
-                    }
-                    trades.append(trade_data)
-                    await log_callback("TRADE_RECORD", trade_data)
-                    to_remove.append(stock)
-        
+            df = stock_data.get(stock)
+            if df is None or current_date not in df.index:
+                continue
+
+            sell_price = float(df.loc[current_date, "close"])
+            hold_days  = i - info["start_idx"]
+            profit_pct = (sell_price - info["buy_price"]) / info["buy_price"] * 100
+
+            sell_reason = _judge_sell(strategy, hold_days, profit_pct)
+            if sell_reason:
+                trade_data = {
+                    "代码":     stock,
+                    "名称":     stock_names.get(stock, stock),
+                    "买入日期": info["buy_date"].strftime("%Y-%m-%d"),
+                    "买入价":   round(info["buy_price"], 2),
+                    "购买股数": info.get("shares", 0),
+                    "购买金额": round(info.get("buy_amount", 0), 2),
+                    "卖出日期": date_str,
+                    "卖出价":   round(sell_price, 2),
+                    "持仓天数": max(hold_days, 1),
+                    "收益率(%)": round(profit_pct, 2),
+                }
+                trades.append(trade_data)
+                await log_callback("TRADE_RECORD", trade_data)
+                to_remove.append(stock)
+
         for stock in to_remove:
             del held_stocks[stock]
-            
-        # 3. 收盘后选股 盘后计算买入名单 (待次日买入)
+
+        # ── 3d. 盘后选股（待次日买入） ──
         available_slots = max_positions - len(held_stocks)
         if available_slots > 0:
-            candidates = []
-            for stock, df in stock_data.items():
-                if stock in held_stocks:
-                    continue
-                if current_date in df.index:
-                    row = df.loc[current_date]
-                    if strategy == "rsv":
-                        if pd.notnull(row['rsv_long']) and pd.notnull(row['rsv_short']) and pd.notnull(row['vol_ratio']):
-                            if row['rsv_long'] >= 80 and row['rsv_short'] <= 20 and row['vol_ratio'] > 0:
-                                candidates.append({
-                                    'stock': stock,
-                                    'vol_ratio': row['vol_ratio']
-                                })
-                    elif strategy == "ma":
-                        if pd.notnull(row.get('buy_signal')) and row['buy_signal']:
-                            candidates.append({
-                                'stock': stock,
-                                'vol_ratio': 1.0 # 随便给个权重
-                            })
-                    elif strategy == "brick":
-                        if pd.notnull(row.get('buy_signal')) and row['buy_signal']:
-                            candidates.append({
-                                'stock': stock,
-                                'score': float(row.get('brick_score', 0))
-                            })
-            
-            if candidates:
-                if strategy == "rsv":
-                    candidates.sort(key=lambda x: x['vol_ratio'])
-                    buy_list = [c['stock'] for c in candidates[:available_slots]]
-                elif strategy == "brick":
-                    candidates.sort(key=lambda x: x['score'], reverse=True)
-                    buy_list = [c['stock'] for c in candidates] # Keep all. Next morning's opening price gap check may filter some out.
-                else:
-                    buy_list = [c['stock'] for c in candidates[:available_slots]]
+            buy_list = _select_candidates(
+                strategy, stock_data, held_stocks, current_date, available_slots
+            )
 
+    # ── 4. 汇总统计 ──
     await log_callback("INFO", "=== 回测结束，正在汇总统计报告 ===")
 
-    
     if not trades:
-        await log_callback("WARN", "没有产生足够的触发信号导致交易...")
+        await log_callback("WARN", "没有产生任何有效交易，请检查策略参数或扩大回测时间范围。")
         return None
-        
-    trades_df = pd.DataFrame(trades)
+
+    trades_df   = pd.DataFrame(trades)
     total_trades = len(trades_df)
-    win_trades = len(trades_df[trades_df['收益率(%)'] > 0])
+    win_trades  = int((trades_df["收益率(%)"] > 0).sum())
     loss_trades = total_trades - win_trades
-    win_rate = win_trades / total_trades * 100 if total_trades > 0 else 0
-    avg_profit = trades_df['收益率(%)'].mean()
-    
-    await log_callback("INFO", f"总交易次数: {total_trades} 次")
-    await log_callback("INFO", f"交易胜率: {win_rate:.2f}%")
-    
+    win_rate    = win_trades / total_trades * 100
+    avg_profit  = float(trades_df["收益率(%)"].mean())
+    max_profit  = float(trades_df["收益率(%)"].max())
+    max_loss    = float(trades_df["收益率(%)"].min())
+
+    await log_callback("INFO", f"总交易次数: {total_trades} 次 | 胜率: {win_rate:.2f}% | 平均收益: {avg_profit:.2f}%")
+
     return {
-        'initial_capital': initial_capital,
-        'final_capital': round(initial_capital * current_equity, 2),
-        'total_trades': total_trades,
-        'win_trades': win_trades,
-        'loss_trades': loss_trades,
-        'win_rate': round(win_rate, 2),
-        'avg_profit': round(avg_profit, 2),
-        'daily_equity': daily_equity_curve
+        "initial_capital": initial_capital,
+        "final_capital":   round(initial_capital * current_equity, 2),
+        "total_trades":    total_trades,
+        "win_trades":      win_trades,
+        "loss_trades":     loss_trades,
+        "win_rate":        round(win_rate, 2),
+        "avg_profit":      round(avg_profit, 2),
+        "max_profit":      round(max_profit, 2),
+        "max_loss":        round(max_loss, 2),
+        "daily_equity":    daily_equity_curve,
     }
 
+
+# ─────────────────────── 辅助函数 ───────────────────────
+
+def _batch_load(args_list: list[tuple]) -> list[tuple]:
+    """进程池调用的批量加载入口（必须是顶层函数）"""
+    return [_load_single_file(a) for a in args_list]
+
+
+def _judge_sell(strategy: str, hold_days: int, profit_pct: float) -> str | None:
+    """根据策略和持仓情况判断是否触发卖出，返回卖出原因或 None"""
+    if strategy == "rsv":
+        if hold_days >= 2:
+            return "持仓满2天尾盘卖出"
+    elif strategy == "ma":
+        if profit_pct > 0.2:
+            return "盈利卖出(模拟14:55)"
+        if hold_days >= 5:
+            return "持仓满5天强制卖出"
+    elif strategy == "brick":
+        if profit_pct > 0:
+            return "盈利卖出"
+        if hold_days >= 5:
+            return "持仓满5天强制卖出"
+    return None
+
+
+def _select_candidates(
+    strategy:    str,
+    stock_data:  dict[str, pd.DataFrame],
+    held_stocks: dict[str, dict],
+    current_date,
+    available_slots: int,
+) -> list[str]:
+    """盘后选股，返回次日计划买入的股票列表"""
+    candidates: list[dict] = []
+
+    for stock, df in stock_data.items():
+        if stock in held_stocks or current_date not in df.index:
+            continue
+        row = df.loc[current_date]
+
+        if strategy == "rsv":
+            rl = row.get("rsv_long");  rs = row.get("rsv_short"); vr = row.get("vol_ratio")
+            if pd.notnull(rl) and pd.notnull(rs) and pd.notnull(vr):
+                if rl >= 80 and rs <= 20 and vr > 0:
+                    candidates.append({"stock": stock, "score": float(vr)})
+
+        elif strategy == "ma":
+            sig = row.get("buy_signal")
+            if pd.notnull(sig) and sig:
+                candidates.append({"stock": stock, "score": 1.0})
+
+        elif strategy == "brick":
+            sig = row.get("buy_signal")
+            if pd.notnull(sig) and sig:
+                candidates.append({"stock": stock, "score": float(row.get("brick_score", 0))})
+
+    if not candidates:
+        return []
+
+    if strategy == "rsv":
+        # RSV 策略：取成交量放大倍数最小的（缩量）
+        candidates.sort(key=lambda x: x["score"])
+        return [c["stock"] for c in candidates[:available_slots]]
+    else:
+        # MA / Brick：按得分从高到低排序
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        return [c["stock"] for c in candidates[:available_slots]]
+
+
+# ─────────────────────── CLI 入口 ───────────────────────
+
+def run_backtest(data_dir: str) -> None:
+    asyncio.run(_run_backtest_wrapper(data_dir))
+
+
+async def _run_backtest_wrapper(data_dir: str) -> None:
+    async def print_callback(level: str, msg: Any) -> None:
+        print(f"[{level}] {msg}")
+    await run_backtest_async(data_dir, print_callback)
+
+
 if __name__ == "__main__":
-    data_dir = "e:/PythonProject/BacktestSystem/all_stock_data"
-    run_backtest(data_dir)
+    run_backtest("e:/PythonProject/BacktestSystem/all_stock_data")
