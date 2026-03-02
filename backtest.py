@@ -32,6 +32,7 @@ STRATEGY_NAMES = {
     "rsv":   "RSV背离+缩量轮动策略",
     "ma":    "5日强平动量策略",
     "brick": "砖型图打分策略",
+    "small_bank": "小市值+银行轮动(实盘优化版)",
 }
 
 MIN_ROWS = 25  # 数据行数过少则跳过
@@ -104,11 +105,25 @@ def _calc_brick(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _calc_small_bank(df: pd.DataFrame) -> pd.DataFrame:
+    """小市值+银行轮动混合策略指标"""
+    df["turnover"] = df["close"] * df["volume"]
+    df["avg_turnover20"] = df["turnover"].rolling(20, min_periods=1).mean()
+    df["max_vol120"] = df["volume"].rolling(120, min_periods=1).max()
+    df["days_listed"] = np.arange(len(df))
+    return df
+
+
 _INDICATOR_FUNCS = {
     "rsv":   _calc_rsv,
     "ma":    _calc_ma,
     "brick": _calc_brick,
+    "small_bank": _calc_small_bank,
 }
+
+def _is_bank_period(dt: pd.Timestamp) -> bool:
+    mmdd = dt.strftime('%m-%d')
+    return ('12-15' <= mmdd <= '12-31') or ('01-01' <= mmdd <= '01-30') or ('04-04' <= mmdd <= '04-28')
 
 # ─────────────────────── 单文件加载（同步，用于 executor） ───────────────────────
 
@@ -142,7 +157,8 @@ def _load_single_file(args: tuple) -> tuple[str, str, pd.DataFrame | None]:
         df = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
         if df.empty:
             return stock_code, stock_name, None
-
+        
+        # 补齐最新几天可能缺失的字段，确保后续计算安全
         df.set_index("date", inplace=True)
         return stock_code, stock_name, df
 
@@ -327,6 +343,11 @@ async def run_backtest_async(
 
         # ── 3c. 尾盘卖出判定 ──
         to_remove: list[str] = []
+        is_bp = False
+        bank_stocks = ["601988", "601398", "601288"]
+        if strategy == "small_bank":
+            is_bp = _is_bank_period(current_date)
+            
         for stock, info in held_stocks.items():
             df = stock_data.get(stock)
             if df is None or current_date not in df.index:
@@ -336,7 +357,26 @@ async def run_backtest_async(
             hold_days  = i - info["start_idx"]
             profit_pct = (sell_price - info["buy_price"]) / info["buy_price"] * 100
 
-            sell_reason = _judge_sell(strategy, hold_days, profit_pct)
+            sell_reason = None
+            if strategy == "small_bank":
+                if is_bp:
+                    if stock not in bank_stocks:
+                        sell_reason = "进入银行时段，清仓非银行股"
+                else:
+                    if stock in bank_stocks:
+                        sell_reason = "进入小市值时段，清仓银行股"
+                    elif profit_pct < -9.0:
+                        sell_reason = "个股止损触发(跌幅>-9%)"
+                    elif hold_days > 0 and i > 0:
+                        # 放量抛售
+                        prev_dt = sorted_dates[i-1]
+                        if prev_dt in df.index:
+                            max_vol = float(df.loc[prev_dt, "max_vol120"])
+                            curr_vol = float(df.loc[current_date, "volume"])
+                            if max_vol > 0 and curr_vol > max_vol * 0.9:
+                                sell_reason = f"放量卖出(放量至新高90%以上)"
+            else:
+                sell_reason = _judge_sell(strategy, hold_days, profit_pct)
             if sell_reason:
                 trade_data = {
                     "代码":     stock,
@@ -451,6 +491,45 @@ def _select_candidates(
             sig = row.get("buy_signal")
             if pd.notnull(sig) and sig:
                 candidates.append({"stock": stock, "score": float(row.get("brick_score", 0))})
+
+        elif strategy == "small_bank":
+            # 过滤不可交易小票规则
+            if stock.startswith(("4", "8", "68", "30")):
+                continue
+            if row.get("days_listed", 0) < 375:
+                continue
+            # 近似使用近20日平均成交额作为流通市值的平替
+            turnover = row.get("avg_turnover20")
+            if pd.notnull(turnover) and turnover > 0:
+                candidates.append({"stock": stock, "score": float(turnover)})
+
+    if strategy == "small_bank":
+        bank_stocks = ["601988", "601398", "601288"]
+        if _is_bank_period(current_date):
+            bank_cands = []
+            for b in bank_stocks:
+                b_df = stock_data.get(b)
+                if b_df is not None and current_date in b_df.index:
+                    b_row = b_df.loc[current_date]
+                    if b_row["close"] > 0:
+                        close_prices = b_df.loc[:current_date, "close"]
+                        if len(close_prices) > 1:
+                            prev_close = float(close_prices.iloc[-2])
+                            if prev_close > 0:
+                                ratio = float(b_row["close"]) / prev_close
+                                bank_cands.append({"stock": b, "score": ratio})
+            if bank_cands:
+                bank_cands.sort(key=lambda x: x["score"])
+                if len(bank_cands) > 1 and (bank_cands[-1]["score"] - bank_cands[0]["score"] > 0.005):
+                    return [bank_cands[0]["stock"]]
+                else:
+                    holding_bank = [s for s in held_stocks if s in bank_stocks]
+                    return holding_bank if holding_bank else [bank_cands[0]["stock"]]
+            return []
+        else:
+            if not candidates: return []
+            candidates.sort(key=lambda x: x["score"])
+            return [c["stock"] for c in candidates[:available_slots]]
 
     if not candidates:
         return []

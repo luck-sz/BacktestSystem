@@ -103,6 +103,7 @@
                             <option value="rsv">RSV背离+缩量轮动策略</option>
                             <option value="ma">5日强平动量策略</option>
                             <option value="brick">砖型图打分策略</option>
+                            <option value="small_bank">小市值+银行轮动(实盘优化版)</option>
                         </select>
                         <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
                             <span class="material-symbols-outlined text-sm">expand_more</span>
@@ -295,11 +296,53 @@
                     </div>
                 </div>
 
+                <!-- 小市值+银行轮动 策略参数配置面版 -->
+                <div id="strategy-params-small_bank" style="display: none;" class="flex flex-col gap-6">
+                    <div class="flex flex-col gap-2">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">策略参数</label>
+                        <div class="space-y-2">
+                            <details class="group rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
+                                open="">
+                                <summary
+                                    class="flex cursor-pointer items-center justify-between px-3 py-2 select-none hover:bg-slate-100 transition-colors">
+                                    <span class="text-sm font-medium text-slate-700">常规小市值设置</span>
+                                    <span
+                                        class="material-symbols-outlined text-slate-400 text-sm group-open:rotate-180 transition-transform">expand_more</span>
+                                </summary>
+                                <div class="px-3 pb-3 pt-1 border-t border-slate-200 border-dashed bg-white">
+                                    <div class="flex gap-2 items-center justify-between mt-2">
+                                        <label
+                                            class="text-xs text-slate-700 font-bold whitespace-nowrap">持仓上限(只)</label>
+                                        <input id="max-positions-small_bank"
+                                            class="w-16 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700 font-bold"
+                                            type="number" value="7" />
+                                    </div>
+                                    <div class="mt-3 text-[11px] text-slate-500">过滤科创/创业/北交所及次新股</div>
+                                </div>
+                            </details>
+                            <details class="group rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
+                                open="">
+                                <summary
+                                    class="flex cursor-pointer items-center justify-between px-3 py-2 select-none hover:bg-slate-100 transition-colors">
+                                    <span class="text-sm font-medium text-slate-700">银行轮动防御机制</span>
+                                    <span
+                                        class="material-symbols-outlined text-slate-400 text-sm group-open:rotate-180 transition-transform">expand_more</span>
+                                </summary>
+                                <div class="px-3 pb-3 pt-2 border-t border-slate-200 border-dashed bg-white">
+                                    <span class="text-[11px] text-slate-500 leading-tight">每年 12.15~01.30 及 04.04~04.28
+                                        期间，强制清仓小市值股票，全仓轮动三大行（工、农、中），规避年报/一季报暴雷风险。</span>
+                                </div>
+                            </details>
+                        </div>
+                    </div>
+                </div>
+
                 <script>
                     const selector = document.getElementById('strategy-selector');
                     const paramsMA = document.getElementById('strategy-params-ma');
                     const paramsRSV = document.getElementById('strategy-params-rsv');
                     const paramsBrick = document.getElementById('strategy-params-brick');
+                    const paramsSmallBank = document.getElementById('strategy-params-small_bank');
                     const titleText = document.getElementById('strategy-title');
                     const descText = document.getElementById('strategy-desc');
 
@@ -308,18 +351,28 @@
                             paramsMA.style.display = 'flex';
                             paramsRSV.style.display = 'none';
                             paramsBrick.style.display = 'none';
+                            paramsSmallBank.style.display = 'none';
                             titleText.textContent = '5日强平动量';
                             descText.textContent = '经典的均线动量与见好就收短线策略';
                         } else if (this.value === 'brick') {
                             paramsMA.style.display = 'none';
                             paramsRSV.style.display = 'none';
                             paramsBrick.style.display = 'flex';
+                            paramsSmallBank.style.display = 'none';
                             titleText.textContent = '砖型图打分策略';
                             descText.textContent = 'KDJ深水超卖+突破MA60趋势的多因子共振短线策略';
+                        } else if (this.value === 'small_bank') {
+                            paramsMA.style.display = 'none';
+                            paramsRSV.style.display = 'none';
+                            paramsBrick.style.display = 'none';
+                            paramsSmallBank.style.display = 'flex';
+                            titleText.textContent = '小市值+银行轮动';
+                            descText.textContent = '避开财报季暴雷配置三大行，其余时间做量价优选小市值';
                         } else {
                             paramsMA.style.display = 'none';
                             paramsRSV.style.display = 'flex';
                             paramsBrick.style.display = 'none';
+                            paramsSmallBank.style.display = 'none';
                             titleText.textContent = 'RSV背离轮动';
                             descText.textContent = '捕捉底背离及缩量的超跌反弹短线策略';
                         }
@@ -652,6 +705,8 @@
                     maxPositions = document.getElementById('max-positions-rsv').value || '2';
                 } else if (strategy === 'brick') {
                     maxPositions = document.getElementById('max-positions-brick').value || '10';
+                } else if (strategy === 'small_bank') {
+                    maxPositions = document.getElementById('max-positions-small_bank').value || '7';
                 }
 
                 startBtn.disabled = true;

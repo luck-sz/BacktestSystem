@@ -196,6 +196,8 @@
                 titleEl.textContent = `策略：5日强平动量 (${startDate} 到 ${endDate})`;
             } else if (strategy === 'brick') {
                 titleEl.textContent = `策略：砖型图打分 (${startDate} 到 ${endDate})`;
+            } else if (strategy === 'small_bank') {
+                titleEl.textContent = `策略：小市值+银行轮动 (${startDate} 到 ${endDate})`;
             } else {
                 titleEl.textContent = `策略：RSV背离+缩量轮动 (${startDate} 到 ${endDate})`;
             }
