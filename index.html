@@ -31,27 +31,33 @@
         }
     </script>
     <style>
-        ::-webkit-scrollbar {
+        .custom-scrollbar::-webkit-scrollbar {
             width: 8px;
             height: 8px;
         }
 
-        ::-webkit-scrollbar-track {
+        .custom-scrollbar::-webkit-scrollbar-track {
             background: #f1f5f9;
         }
 
-        ::-webkit-scrollbar-thumb {
+        .custom-scrollbar::-webkit-scrollbar-thumb {
             background: #cbd5e1;
             border-radius: 4px;
         }
 
-        ::-webkit-scrollbar-thumb:hover {
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
             background: #94a3b8;
+        }
+
+        .board-pill-active {
+            border-color: #135bec !important;
+            background-color: #eff6ff !important;
+            color: #135bec !important;
         }
     </style>
 </head>
 
-<body class="bg-background-light text-text-main font-display min-h-screen flex flex-col overflow-hidden">
+<body class="bg-background-light text-text-main font-display h-screen flex flex-col overflow-hidden">
     <header
         class="flex items-center justify-between whitespace-nowrap border-b border-solid border-border-light px-6 py-3 bg-white z-20 shrink-0 shadow-sm">
         <div class="flex items-center gap-8">
@@ -62,8 +68,9 @@
                 <h2 class="text-xl font-bold leading-tight tracking-[-0.015em]">策略回测工作台</h2>
             </div>
             <nav class="hidden md:flex items-center gap-6">
-                <a class="text-text-muted hover:text-primary text-sm font-medium transition-colors" href="#">仪表盘</a>
-                <a class="text-primary text-sm font-medium" href="#">策略库</a>
+                <a class="text-primary text-sm font-medium" href="/">新建回测</a>
+                <a class="text-text-muted hover:text-primary text-sm font-medium transition-colors"
+                    href="/history">回测历史</a>
             </nav>
         </div>
         <div class="flex items-center gap-4">
@@ -87,12 +94,12 @@
     </header>
     <main class="flex flex-1 overflow-hidden">
         <aside
-            class="w-80 flex flex-col border-r border-border-light bg-white overflow-y-auto shrink-0 custom-scrollbar">
+            class="w-96 flex flex-col border-r border-border-light bg-white overflow-y-auto shrink-0 custom-scrollbar">
             <div class="p-5 border-b border-border-light bg-slate-50/50">
                 <h3 class="text-lg font-bold text-text-main mb-1" id="strategy-title">策略配置</h3>
                 <p class="text-xs text-text-muted" id="strategy-desc">定义您的交易逻辑</p>
             </div>
-            <div class="p-5 flex flex-col gap-6">
+            <div class="p-5 flex flex-col gap-6 pb-20">
 
                 <!-- 策略选择 -->
                 <div class="flex flex-col gap-2">
@@ -101,7 +108,6 @@
                         <select id="strategy-selector"
                             class="w-full rounded-lg border border-slate-300 bg-white text-text-main text-sm h-10 pl-3 pr-10 focus:ring-2 focus:ring-primary focus:border-transparent appearance-none shadow-sm bg-none font-medium">
                             <option value="rsv">RSV背离+缩量轮动策略</option>
-                            <option value="ma">5日强平动量策略</option>
                             <option value="brick">砖型图打分策略</option>
                             <option value="small_bank">小市值+银行轮动(实盘优化版)</option>
                         </select>
@@ -127,6 +133,154 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- 排除条件 -->
+                <div class="flex flex-col gap-2">
+                    <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">过滤条件 (排除)</label>
+                    <div
+                        class="bg-white border border-slate-200 rounded-lg shadow-sm flex flex-col divide-y divide-slate-100 overflow-hidden">
+
+                        <!-- 市场板块：pill 样式 -->
+                        <div class="px-3 pt-2.5 pb-3">
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">市场板块</p>
+                            <div class="grid grid-cols-2 gap-1.5">
+
+                                <label id="pill-st" for="exclude-st"
+                                    class="board-pill board-pill-active cursor-pointer select-none flex flex-col items-center justify-center gap-0.5 py-2 px-1 rounded-lg border-2 border-primary bg-blue-50 text-primary transition-all">
+                                    <input type="checkbox" id="exclude-st" class="hidden" checked />
+                                    <span class="text-xs font-bold leading-tight">ST/退市</span>
+                                    <span class="text-[9px] opacity-70 leading-tight">*ST/退市</span>
+                                </label>
+
+                                <label id="pill-kc" for="exclude-kc"
+                                    class="board-pill cursor-pointer select-none flex flex-col items-center justify-center gap-0.5 py-2 px-1 rounded-lg border-2 border-slate-200 bg-slate-50 text-slate-500 transition-all hover:border-blue-300 hover:bg-blue-50/50">
+                                    <input type="checkbox" id="exclude-kc" class="hidden" />
+                                    <span class="text-xs font-bold leading-tight">科创板</span>
+                                    <span class="text-[9px] opacity-70 leading-tight">688</span>
+                                </label>
+
+                                <label id="pill-cy" for="exclude-cy"
+                                    class="board-pill cursor-pointer select-none flex flex-col items-center justify-center gap-0.5 py-2 px-1 rounded-lg border-2 border-slate-200 bg-slate-50 text-slate-500 transition-all hover:border-blue-300 hover:bg-blue-50/50">
+                                    <input type="checkbox" id="exclude-cy" class="hidden" />
+                                    <span class="text-xs font-bold leading-tight">创业板</span>
+                                    <span class="text-[9px] opacity-70 leading-tight">300/301</span>
+                                </label>
+
+                                <label id="pill-bse" for="exclude-bse"
+                                    class="board-pill cursor-pointer select-none flex flex-col items-center justify-center gap-0.5 py-2 px-1 rounded-lg border-2 border-slate-200 bg-slate-50 text-slate-500 transition-all hover:border-blue-300 hover:bg-blue-50/50">
+                                    <input type="checkbox" id="exclude-bse" class="hidden" />
+                                    <span class="text-xs font-bold leading-tight">北交所</span>
+                                    <span class="text-[9px] opacity-70 leading-tight">43/83开头</span>
+                                </label>
+
+                            </div>
+                        </div>
+
+
+                        <!-- 价格区间 -->
+                        <div class="px-3 py-3">
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">价格区间</p>
+                            <div class="flex flex-col gap-4">
+                                <label class="flex items-start gap-3 cursor-pointer group">
+                                    <input type="checkbox" id="exclude-lowprice"
+                                        class="rounded text-primary focus:ring-primary border-slate-300 w-4 h-4 cursor-pointer mt-0.5 shrink-0">
+                                    <div class="flex flex-col gap-1.5 min-w-0 flex-1">
+                                        <span
+                                            class="text-sm text-slate-700 font-semibold group-hover:text-primary transition-colors">低价股</span>
+                                        <div class="flex items-center gap-2 text-[11px] text-slate-500">
+                                            <span class="whitespace-nowrap">最新收盘价 &lt;</span>
+                                            <input type="number" id="lowprice-threshold" value="3" min="0.5" max="50"
+                                                step="0.5" onclick="event.stopPropagation()"
+                                                class="w-16 h-7 text-center text-xs rounded-md border border-slate-200 bg-slate-50 focus:ring-2 focus:ring-primary/20 focus:border-primary text-slate-700 font-bold outline-none transition-all">
+                                            <span class="whitespace-nowrap">元</span>
+                                        </div>
+                                    </div>
+                                </label>
+                                <label class="flex items-start gap-3 cursor-pointer group">
+                                    <input type="checkbox" id="exclude-highprice"
+                                        class="rounded text-primary focus:ring-primary border-slate-300 w-4 h-4 cursor-pointer mt-0.5 shrink-0">
+                                    <div class="flex flex-col gap-1.5 min-w-0 flex-1">
+                                        <span
+                                            class="text-sm text-slate-700 font-semibold group-hover:text-primary transition-colors">高价股</span>
+                                        <div class="flex items-center gap-2 text-[11px] text-slate-500">
+                                            <span class="whitespace-nowrap">最新收盘价 &gt;</span>
+                                            <input type="number" id="highprice-threshold" value="200" min="50"
+                                                max="2000" step="10" onclick="event.stopPropagation()"
+                                                class="w-20 h-7 text-center text-xs rounded-md border border-slate-200 bg-slate-50 focus:ring-2 focus:ring-primary/20 focus:border-primary text-slate-700 font-bold outline-none transition-all">
+                                            <span class="whitespace-nowrap">元</span>
+                                        </div>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- 流动性 -->
+                        <div class="px-3 py-3">
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">流动性</p>
+                            <div class="flex flex-col gap-4">
+                                <label class="flex items-start gap-3 cursor-pointer group">
+                                    <input type="checkbox" id="exclude-suspended"
+                                        class="rounded text-primary focus:ring-primary border-slate-300 w-4 h-4 cursor-pointer mt-0.5 shrink-0"
+                                        checked>
+                                    <div class="flex flex-col gap-0.5 min-w-0 flex-1">
+                                        <span
+                                            class="text-sm text-slate-700 font-semibold group-hover:text-primary transition-colors">停牌股</span>
+                                        <span class="text-[11px] text-slate-400">排除本日无成交量的股票</span>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- 市值范围 -->
+                        <div class="px-3 py-3">
+                            <div class="flex items-center justify-between mb-2">
+                                <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">市值范围 (估算)</p>
+                            </div>
+                            <div class="flex flex-col gap-4">
+                                <label class="flex items-start gap-3 cursor-pointer group">
+                                    <input type="checkbox" id="exclude-mktcap-min"
+                                        class="rounded text-primary focus:ring-primary border-slate-300 w-4 h-4 cursor-pointer mt-0.5 shrink-0">
+                                    <div class="flex flex-col gap-1.5 min-w-0 flex-1">
+                                        <span
+                                            class="text-sm text-slate-700 font-semibold group-hover:text-primary transition-colors">市值下限</span>
+                                        <div class="flex items-center gap-2 text-[11px] text-slate-500">
+                                            <span class="whitespace-nowrap">预估总市值 &gt;</span>
+                                            <input type="number" id="mktcap-min" value="20" min="1" max="10000" step="5"
+                                                onclick="event.stopPropagation()"
+                                                class="w-20 h-7 text-center text-xs rounded-md border border-slate-200 bg-slate-50 focus:ring-2 focus:ring-primary/20 focus:border-primary text-slate-700 font-bold outline-none transition-all">
+                                            <span class="whitespace-nowrap">亿元</span>
+                                        </div>
+                                    </div>
+                                </label>
+                                <label class="flex items-start gap-3 cursor-pointer group">
+                                    <input type="checkbox" id="exclude-mktcap-max"
+                                        class="rounded text-primary focus:ring-primary border-slate-300 w-4 h-4 cursor-pointer mt-0.5 shrink-0">
+                                    <div class="flex flex-col gap-1.5 min-w-0 flex-1">
+                                        <span
+                                            class="text-sm text-slate-700 font-semibold group-hover:text-primary transition-colors">市值上限</span>
+                                        <div class="flex items-center gap-2 text-[11px] text-slate-500">
+                                            <span class="whitespace-nowrap">预估总市值 &lt;</span>
+                                            <input type="number" id="mktcap-max" value="200" min="10" max="50000"
+                                                step="10" onclick="event.stopPropagation()"
+                                                class="w-24 h-7 text-center text-xs rounded-md border border-slate-200 bg-slate-50 focus:ring-2 focus:ring-primary/20 focus:border-primary text-slate-700 font-bold outline-none transition-all">
+                                            <span class="whitespace-nowrap">亿元</span>
+                                        </div>
+                                    </div>
+                                </label>
+                                <div class="bg-amber-50/50 p-2 rounded border border-amber-100/50">
+                                    <p class="text-[10px] text-amber-700/80 leading-relaxed flex items-center gap-1">
+                                        <span class="material-symbols-outlined text-xs">info</span>
+                                        市值以 日均成交额 ÷ 2% 估算，仅供参考。
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+
+
 
                 <!-- Brick 策略参数配置面版 -->
                 <div id="strategy-params-brick" style="display: none;" class="flex flex-col gap-6">
@@ -158,65 +312,8 @@
                         <div class="p-3 rounded-lg bg-primary/5 border border-primary/20 shadow-sm">
                             <ul class="text-xs text-slate-700 space-y-2 list-disc list-inside">
                                 <li><strong>买入时机：</strong> 次日 09:30 开盘集合竞价买入，跳空 ≤ 0.5%</li>
-                                <li><strong>卖出逻辑：</strong> 14:55检查，若浮盈直接卖出，否则若满5天自动平仓</li>
+                                <li><strong>卖出逻辑：</strong> 次日 09:30 开盘若盈利超1%即止盈，否则次日 14:55 无条件清仓卖出</li>
                             </ul>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- MA 策略参数配置面版 -->
-                <div id="strategy-params-ma" style="display: none;" class="flex flex-col gap-6">
-                    <div class="flex flex-col gap-2">
-                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">技术指标</label>
-                        <div class="space-y-2">
-                            <details class="group rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
-                                open="">
-                                <summary
-                                    class="flex cursor-pointer items-center justify-between px-3 py-2 select-none hover:bg-slate-100 transition-colors">
-                                    <span class="text-sm font-medium text-slate-700">移动平均线 (MA)</span>
-                                    <span
-                                        class="material-symbols-outlined text-slate-400 text-sm group-open:rotate-180 transition-transform">expand_more</span>
-                                </summary>
-                                <div class="px-3 pb-3 pt-1 border-t border-slate-200 border-dashed bg-white">
-                                    <div class="flex gap-2 mb-2 items-center">
-                                        <label class="text-xs text-slate-500 w-12">短周期</label>
-                                        <input
-                                            class="flex-1 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700"
-                                            type="number" value="5" />
-                                    </div>
-                                    <div class="flex gap-2 items-center">
-                                        <label class="text-xs text-slate-500 w-12">长周期</label>
-                                        <input
-                                            class="flex-1 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700"
-                                            type="number" value="20" />
-                                    </div>
-                                </div>
-                            </details>
-                        </div>
-                    </div>
-                    <div class="flex flex-col gap-3">
-                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">交易逻辑</label>
-                        <div class="p-3 rounded-lg bg-green-50 border border-green-200 shadow-sm">
-                            <div class="flex items-center justify-between mb-2">
-                                <span class="text-xs font-bold text-green-700 flex items-center gap-1">
-                                    <span class="material-symbols-outlined text-sm">trending_up</span> 买入逻辑
-                                </span>
-                            </div>
-                            <p
-                                class="text-xs text-slate-700 leading-relaxed font-mono bg-white/50 p-2 rounded border border-green-100">
-                                IF MA_短期 &gt; MA_长期
-                            </p>
-                        </div>
-                        <div class="p-3 rounded-lg bg-red-50 border border-red-200 shadow-sm">
-                            <div class="flex items-center justify-between mb-2">
-                                <span class="text-xs font-bold text-red-700 flex items-center gap-1">
-                                    <span class="material-symbols-outlined text-sm">trending_down</span> 卖出逻辑
-                                </span>
-                            </div>
-                            <p
-                                class="text-xs text-slate-700 leading-relaxed font-mono bg-white/50 p-2 rounded border border-red-100">
-                                HOLD_DAYS &gt;= 5 OR PROFIT &gt; 0
-                            </p>
                         </div>
                     </div>
                 </div>
@@ -339,7 +436,6 @@
 
                 <script>
                     const selector = document.getElementById('strategy-selector');
-                    const paramsMA = document.getElementById('strategy-params-ma');
                     const paramsRSV = document.getElementById('strategy-params-rsv');
                     const paramsBrick = document.getElementById('strategy-params-brick');
                     const paramsSmallBank = document.getElementById('strategy-params-small_bank');
@@ -347,29 +443,19 @@
                     const descText = document.getElementById('strategy-desc');
 
                     selector.addEventListener('change', function () {
-                        if (this.value === 'ma') {
-                            paramsMA.style.display = 'flex';
-                            paramsRSV.style.display = 'none';
-                            paramsBrick.style.display = 'none';
-                            paramsSmallBank.style.display = 'none';
-                            titleText.textContent = '5日强平动量';
-                            descText.textContent = '经典的均线动量与见好就收短线策略';
-                        } else if (this.value === 'brick') {
-                            paramsMA.style.display = 'none';
+                        if (this.value === 'brick') {
                             paramsRSV.style.display = 'none';
                             paramsBrick.style.display = 'flex';
                             paramsSmallBank.style.display = 'none';
                             titleText.textContent = '砖型图打分策略';
                             descText.textContent = 'KDJ深水超卖+突破MA60趋势的多因子共振短线策略';
                         } else if (this.value === 'small_bank') {
-                            paramsMA.style.display = 'none';
                             paramsRSV.style.display = 'none';
                             paramsBrick.style.display = 'none';
                             paramsSmallBank.style.display = 'flex';
                             titleText.textContent = '小市值+银行轮动';
                             descText.textContent = '避开财报季暴雷配置三大行，其余时间做量价优选小市值';
                         } else {
-                            paramsMA.style.display = 'none';
                             paramsRSV.style.display = 'flex';
                             paramsBrick.style.display = 'none';
                             paramsSmallBank.style.display = 'none';
@@ -383,8 +469,8 @@
                 </script>
             </div>
         </aside>
-        <section class="flex-1 flex flex-col bg-slate-50 min-w-0 overflow-y-auto">
-            <div class="max-w-4xl w-full mx-auto p-8">
+        <section class="flex-1 bg-slate-50 min-w-0 overflow-y-auto custom-scrollbar">
+            <div class="max-w-4xl w-full mx-auto p-8 pb-20">
                 <h1 class="text-3xl font-black text-slate-900 mb-2">新建回测任务</h1>
                 <p class="text-slate-500 mb-8">配置您的回测环境参数。</p>
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
@@ -693,6 +779,18 @@
             logsContainer.scrollTop = logsContainer.scrollHeight;
         }
 
+        // 板块 Pill 交互
+        document.querySelectorAll('.board-pill input[type="checkbox"]').forEach(input => {
+            input.addEventListener('change', () => {
+                const label = input.closest('label');
+                if (input.checked) {
+                    label.classList.add('board-pill-active');
+                } else {
+                    label.classList.remove('board-pill-active');
+                }
+            });
+        });
+
         if (startBtn) {
             startBtn.addEventListener('click', () => {
                 const startDate = document.getElementById('start-date').value;
@@ -709,9 +807,42 @@
                     maxPositions = document.getElementById('max-positions-small_bank').value || '7';
                 }
 
+                // 收集所有排除条件
+                let excludeArr = [];
+                if (document.getElementById('exclude-st').checked) excludeArr.push('st');
+                if (document.getElementById('exclude-kc').checked) excludeArr.push('kc');
+                if (document.getElementById('exclude-cy').checked) excludeArr.push('cy');
+                if (document.getElementById('exclude-bse').checked) excludeArr.push('bse');
+
+
+                if (document.getElementById('exclude-lowprice').checked) {
+                    const t = document.getElementById('lowprice-threshold').value || '3';
+                    excludeArr.push(`lowprice:${t}`);
+                }
+
+                if (document.getElementById('exclude-highprice').checked) {
+                    const t = document.getElementById('highprice-threshold').value || '200';
+                    excludeArr.push(`highprice:${t}`);
+                }
+
+                if (document.getElementById('exclude-suspended').checked) excludeArr.push('suspended');
+
+
+                // 新增：市值范围过滤
+                if (document.getElementById('exclude-mktcap-min').checked) {
+                    const t = document.getElementById('mktcap-min').value || '20';
+                    excludeArr.push(`mktcap_min:${t}`);
+                }
+                if (document.getElementById('exclude-mktcap-max').checked) {
+                    const t = document.getElementById('mktcap-max').value || '200';
+                    excludeArr.push(`mktcap_max:${t}`);
+                }
+
+                const excludeStr = excludeArr.join(',');
+
                 startBtn.disabled = true;
                 startBtn.innerHTML = '<span class="material-symbols-outlined animate-spin">sync</span> 正在为您跳转...';
-                window.location.href = `/report?start=1&start_date=${startDate}&end_date=${endDate}&strategy=${strategy}&initial_capital=${initialCapital}&max_positions=${maxPositions}`;
+                window.location.href = `/report?start=1&start_date=${startDate}&end_date=${endDate}&strategy=${strategy}&initial_capital=${initialCapital}&max_positions=${maxPositions}&exclude=${excludeStr}`;
             });
         }
     </script>

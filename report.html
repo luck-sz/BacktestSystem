@@ -47,20 +47,19 @@
             <header
                 class="flex items-center justify-between whitespace-nowrap border-b border-solid border-surface-border px-10 py-3 bg-white sticky top-0 z-50">
                 <div class="flex items-center gap-4">
-                    <div class="size-8 text-primary flex items-center justify-center cursor-pointer"
-                        onclick="window.location.href='/'">
+                    <div class="size-8 text-primary flex items-center justify-center cursor-pointer" id="back-btn"
+                        onclick="window.location.href=(new URLSearchParams(window.location.search).get('history_id') ? '/history' : '/');">
                         <span class="material-symbols-outlined text-3xl">arrow_back</span>
                     </div>
                     <h2 class="text-slate-900 text-lg font-bold leading-tight tracking-[-0.015em]">策略回测工作台</h2>
+                    <span class="hidden md:inline text-xs text-slate-400 font-mono ml-1" id="nav-breadcrumb"></span>
                 </div>
                 <div class="flex flex-1 justify-end gap-8">
                     <nav class="hidden md:flex items-center gap-9">
                         <a class="text-text-secondary hover:text-primary text-sm font-medium leading-normal transition-colors"
-                            href="#">概览</a>
-                        <a class="text-text-primary text-sm font-medium leading-normal transition-colors"
-                            href="#">策略</a>
+                            href="/">新建回测</a>
                         <a class="text-text-secondary hover:text-primary text-sm font-medium leading-normal transition-colors"
-                            href="#">设置</a>
+                            href="/history">回测历史</a>
                     </nav>
                     <div class="flex gap-3">
                         <button
@@ -183,24 +182,57 @@
         let currentPage = 1;
         const PAGE_SIZE = 10;
 
+        // 策略名映射
+        const STRATEGY_NAMES = {
+            rsv: 'RSV背离+缩量轮动策略', brick: '砖型图打分策略', small_bank: '小市值+银行轮动(实盘优化版)'
+        };
+
+        // 动态修改副标题
+        function setSubtitle(strategy, startDate, endDate) {
+            const name = STRATEGY_NAMES[strategy] || strategy;
+            document.getElementById('report-strategy-title').textContent = `策略：${name} (${startDate} 到 ${endDate})`;
+        }
+
         // 页面加载完成后处理
         document.addEventListener("DOMContentLoaded", async () => {
             const params = new URLSearchParams(window.location.search);
+            const historyId = params.get('history_id');
+
+            // ── 历史记录模式：直接从保存的 JSON 加载 ──
+            if (historyId) {
+                document.getElementById('nav-breadcrumb').textContent = '← 回测历史 / 报告详情';
+                document.getElementById('stats-cards').innerHTML = '<div class="col-span-full py-10 text-center text-slate-500"><span class="material-symbols-outlined animate-spin align-middle mr-2 text-primary">sync</span> 正在加载历史记录...</div>';
+                try {
+                    const resp = await fetch(`/api/history/${historyId}`);
+                    if (!resp.ok) throw new Error('历史记录不存在');
+                    const data = await resp.json();
+                    window._initialCapital = data.initial_capital || 100000;
+                    const stats = data.stats || {};
+                    const trades = data.trades || [];
+                    setSubtitle(data.strategy, data.start_date, data.end_date);
+                    allTrades = [...trades].reverse();
+                    renderChart(stats);
+                    if (stats.daily_equity) {
+                        window.equityData = stats.daily_equity;
+                        updateMockStats(window.equityData, allTrades);
+                    } else { updateMockStats({}, allTrades); }
+                    renderTablePage();
+                    // 绑定分页
+                    document.getElementById('btn-prev-page').addEventListener('click', () => { if (currentPage > 1) { currentPage--; renderTablePage(); } });
+                    document.getElementById('btn-next-page').addEventListener('click', () => { const tp = Math.ceil(allTrades.length / PAGE_SIZE); if (currentPage < tp) { currentPage++; renderTablePage(); } });
+                    document.getElementById('btn-go-page').addEventListener('click', () => { const tp = Math.ceil(allTrades.length / PAGE_SIZE); const v = parseInt(document.getElementById('page-input').value, 10); if (!isNaN(v) && v >= 1 && v <= tp) { currentPage = v; renderTablePage(); } else { alert(`请输入 1 到 ${tp} 之间的有效页码`); } });
+                } catch (e) {
+                    document.getElementById('stats-cards').innerHTML = `<div class="col-span-full py-10 text-center text-red-400">${e.message}</div>`;
+                }
+                return;
+            }
+
+            // ── 正常流程 ──
             const strategy = params.get('strategy') || 'rsv';
             const startDate = params.get('start_date') || '2026-01-02';
             const endDate = params.get('end_date') || '2026-02-27';
 
-            // 动态修改副标题
-            const titleEl = document.getElementById('report-strategy-title');
-            if (strategy === 'ma') {
-                titleEl.textContent = `策略：5日强平动量 (${startDate} 到 ${endDate})`;
-            } else if (strategy === 'brick') {
-                titleEl.textContent = `策略：砖型图打分 (${startDate} 到 ${endDate})`;
-            } else if (strategy === 'small_bank') {
-                titleEl.textContent = `策略：小市值+银行轮动 (${startDate} 到 ${endDate})`;
-            } else {
-                titleEl.textContent = `策略：RSV背离+缩量轮动 (${startDate} 到 ${endDate})`;
-            }
+            setSubtitle(strategy, startDate, endDate);
 
             const initialCapitalStr = params.get('initial_capital');
             if (initialCapitalStr) {
@@ -213,9 +245,13 @@
                 // 显示加载动画
                 document.getElementById('stats-cards').innerHTML = '<div class="col-span-full py-10 text-center text-slate-500"><span class="material-symbols-outlined animate-spin align-middle mr-2 text-primary">sync</span> <span id="backtest-progress-text">正在准备回测环境，请等待...</span></div>';
 
-                // 开启SSE跑数据，把参数直接带给后端
+                // 收集 exclude 参数并透传给后端
+                const excludeStr = params.get('exclude') || '';
+
+                // 开启SSE跑数据，把参数直接带给后端（注意带上 exclude 参数）
                 let tempTrades = [];
-                const eventSource = new EventSource(`/api/start_backtest?start_date=${startDate}&end_date=${endDate}&strategy=${strategy}&initial_capital=${initialCapital}&max_positions=${maxPositions}`);
+                const sseUrl = `/api/start_backtest?start_date=${startDate}&end_date=${endDate}&strategy=${strategy}&initial_capital=${initialCapital}&max_positions=${maxPositions}&exclude=${encodeURIComponent(excludeStr)}`;
+                const eventSource = new EventSource(sseUrl);
                 eventSource.onmessage = async (event) => {
                     if (event.data === "DONE") {
                         eventSource.close();
@@ -235,6 +271,11 @@
                                 if (tempTrades.length % 10 === 0 || tempTrades.length <= 5) {
                                     renderTablePage();
                                 }
+                            } else if (parsed.level === 'RESULT') {
+                                try {
+                                    const r = JSON.parse(parsed.message);
+                                    if (r.history_id) window._historyId = r.history_id;
+                                } catch (e) { }
                             } else if (parsed.level === 'EQUITY_UPDATE') {
                                 if (!window.equityData) window.equityData = {};
                                 Object.assign(window.equityData, parsed.message);
@@ -250,12 +291,16 @@
                         } catch (e) { }
                     }
                 };
+                // onerror: 记录连续失败次数，超过阈值则降级轮询
                 let sseErrorCount = 0;
+                let sseErrorTimer = null;
                 eventSource.onerror = () => {
                     sseErrorCount++;
-                    // SSE 断线后浏览器会自动重连，onerror 在重连期间会持续触发
-                    // 只有连续失败超过3次（约6秒）才认为真正断了
-                    if (sseErrorCount >= 3) {
+                    // 防抖重置：若 2 秒内收到新消息则认为连接已恢复，重置计数
+                    clearTimeout(sseErrorTimer);
+                    sseErrorTimer = setTimeout(() => { sseErrorCount = 0; }, 2000);
+
+                    if (sseErrorCount >= 5) {
                         eventSource.close();
                         console.warn("SSE 连接多次失败，尝试直接获取结果...");
                         setTimeout(fetchDataAndRender, 1000);

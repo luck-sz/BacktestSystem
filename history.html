@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>回测历史 — 策略回测工作台</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap"
+        rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+        rel="stylesheet" />
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: "#135bec",
+                        "surface-border": "#e2e8f0",
+                        "text-primary": "#1e293b",
+                        "text-secondary": "#64748b",
+                    },
+                    fontFamily: { display: ["Inter", "sans-serif"] },
+                }
+            }
+        }
+    </script>
+    <style>
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        .row-hover:hover {
+            background: #f8faff;
+            cursor: pointer;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 10px;
+            border-radius: 9999px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+        }
+
+        .badge-rsv {
+            background: #dbeafe;
+            color: #1d4ed8;
+        }
+
+        .badge-brick {
+            background: #fef3c7;
+            color: #b45309;
+        }
+
+        .badge-small_bank {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .badge-other {
+            background: #f1f5f9;
+            color: #475569;
+        }
+
+        .up {
+            color: #ef4444;
+        }
+
+        .down {
+            color: #22c55e;
+        }
+
+        .zero {
+            color: #64748b;
+        }
+
+        .del-btn {
+            opacity: 0;
+            transition: opacity .15s;
+        }
+
+        tr:hover .del-btn {
+            opacity: 1;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .fade-in {
+            animation: fadeIn .3s ease both;
+        }
+    </style>
+</head>
+
+<body class="font-display bg-slate-50 text-text-primary antialiased min-h-screen flex flex-col">
+
+    <!-- 顶栏 -->
+    <header
+        class="flex items-center justify-between whitespace-nowrap border-b border-surface-border px-8 py-3 bg-white sticky top-0 z-50 shadow-sm">
+        <div class="flex items-center gap-4">
+            <div class="size-8 text-primary flex items-center justify-center cursor-pointer"
+                onclick="window.location.href='/'">
+                <span class="material-symbols-outlined text-3xl">query_stats</span>
+            </div>
+            <h2 class="text-slate-900 text-lg font-bold leading-tight tracking-[-0.015em]">策略回测工作台</h2>
+            <nav class="hidden md:flex items-center gap-6 ml-4">
+                <a class="text-text-secondary hover:text-primary text-sm font-medium transition-colors"
+                    href="/">新建回测</a>
+                <a class="text-primary text-sm font-semibold border-b-2 border-primary pb-0.5" href="/history">回测历史</a>
+            </nav>
+        </div>
+        <div class="flex gap-3">
+            <button onclick="window.location.href='/'"
+                class="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors shadow-md shadow-primary/20">
+                <span class="material-symbols-outlined text-lg">add</span>新建回测
+            </button>
+        </div>
+    </header>
+
+    <!-- 主体 -->
+    <main class="flex-1 flex flex-col items-center py-8 px-4 sm:px-8">
+        <div class="w-full max-w-[1300px]">
+
+            <!-- 标题行 -->
+            <div class="flex items-center justify-between mb-6">
+                <div>
+                    <h1 class="text-3xl font-black text-slate-900 mb-1">回测历史</h1>
+                    <p class="text-sm text-slate-500">点击任意一条记录查看详细的绩效报告</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div id="select-actions" class="hidden items-center gap-2">
+                        <span class="text-sm text-slate-500" id="selected-count">已选 0 条</span>
+                        <button id="btn-batch-delete"
+                            class="flex items-center gap-1 px-3 py-1.5 bg-red-50 text-red-600 border border-red-200 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors">
+                            <span class="material-symbols-outlined text-base">delete</span>批量删除
+                        </button>
+                    </div>
+                    <button id="btn-refresh"
+                        class="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors shadow-sm">
+                        <span class="material-symbols-outlined text-base">refresh</span>刷新
+                    </button>
+                </div>
+            </div>
+
+            <!-- 统计卡片 -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6" id="summary-cards">
+                <div class="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
+                    <p class="text-xs text-slate-500 mb-1">总回测次数</p>
+                    <p class="text-2xl font-black text-slate-900" id="stat-total">—</p>
+                </div>
+                <div class="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
+                    <p class="text-xs text-slate-500 mb-1">平均胜率</p>
+                    <p class="text-2xl font-black text-slate-900" id="stat-win-rate">—</p>
+                </div>
+                <div class="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
+                    <p class="text-xs text-slate-500 mb-1">最佳策略收益</p>
+                    <p class="text-2xl font-black up" id="stat-best">—</p>
+                </div>
+                <div class="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
+                    <p class="text-xs text-slate-500 mb-1">最差策略收益</p>
+                    <p class="text-2xl font-black down" id="stat-worst">—</p>
+                </div>
+            </div>
+
+            <!-- 表格卡片 -->
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <!-- 搜索 & 过滤栏 -->
+                <div class="flex items-center gap-3 px-6 py-4 border-b border-slate-100 bg-slate-50/60">
+                    <div
+                        class="flex-1 flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 h-9 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 transition-all">
+                        <span class="material-symbols-outlined text-slate-400 text-base">search</span>
+                        <input id="search-input" type="text" placeholder="搜索策略名称..."
+                            class="flex-1 bg-transparent border-none text-sm text-slate-700 placeholder:text-slate-400 focus:ring-0 h-full outline-none" />
+                    </div>
+                    <select id="filter-strategy"
+                        class="h-9 px-3 rounded-lg border border-slate-200 bg-white text-sm text-slate-700 focus:ring-2 focus:ring-primary focus:border-transparent shadow-none appearance-none pr-8 cursor-pointer">
+                        <option value="">全部策略</option>
+                        <option value="rsv">RSV背离</option>
+                        <option value="brick">砖型图</option>
+                        <option value="small_bank">小市值+银行</option>
+                    </select>
+                </div>
+
+                <!-- 表头 -->
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm whitespace-nowrap">
+                        <thead
+                            class="bg-slate-50 text-text-secondary font-semibold border-b border-slate-100 text-xs uppercase tracking-wider">
+                            <tr>
+                                <th class="px-5 py-3 w-10">
+                                    <input type="checkbox" id="check-all"
+                                        class="rounded text-primary focus:ring-primary border-slate-300 cursor-pointer w-4 h-4" />
+                                </th>
+                                <th class="px-5 py-3 w-8">#</th>
+                                <th class="px-5 py-3">策略名称</th>
+                                <th class="px-5 py-3">创建时间</th>
+                                <th class="px-5 py-3">回测时间段</th>
+                                <th class="px-5 py-3 text-center">回测周期</th>
+                                <th class="px-5 py-3 text-right">策略收益</th>
+                                <th class="px-5 py-3 text-right">平均收益</th>
+                                <th class="px-5 py-3 text-right">胜率</th>
+                                <th class="px-5 py-3 text-right">最大盈利</th>
+                                <th class="px-5 py-3 text-right">最大亏损</th>
+                                <th class="px-5 py-3 text-center">总笔数</th>
+                                <th class="px-5 py-3 w-10"></th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-50" id="history-tbody">
+                            <tr>
+                                <td colspan="13" class="px-6 py-16 text-center">
+                                    <span
+                                        class="material-symbols-outlined animate-spin align-middle mr-2 text-primary text-2xl">sync</span>
+                                    <span class="text-slate-400 text-sm">正在加载历史记录...</span>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 底部信息 -->
+                <div class="px-6 py-3 border-t border-slate-100 bg-slate-50/40 flex items-center justify-between">
+                    <span class="text-xs text-slate-400" id="footer-info">共 0 条记录</span>
+                    <span class="text-xs text-slate-400">历史保存于本地 <code
+                            class="bg-slate-100 px-1 rounded">backtest_history/</code> 目录</span>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 删除确认模态框 -->
+    <div id="delete-modal"
+        class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center hidden backdrop-blur-sm">
+        <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4 fade-in">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="p-2 bg-red-50 rounded-xl">
+                    <span class="material-symbols-outlined text-red-500 text-xl">delete_forever</span>
+                </div>
+                <h3 class="font-bold text-slate-900" id="modal-title">确认删除</h3>
+            </div>
+            <p class="text-sm text-slate-600 mb-6" id="modal-body">确定要删除这条回测记录吗？此操作无法撤销。</p>
+            <div class="flex gap-3 justify-end">
+                <button id="modal-cancel"
+                    class="px-4 py-2 rounded-lg text-sm font-medium border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors">取消</button>
+                <button id="modal-confirm"
+                    class="px-4 py-2 rounded-lg text-sm font-medium bg-red-500 text-white hover:bg-red-600 transition-colors shadow-md shadow-red-200">删除</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ─── 数据加载 ────────────────────────────────────────────
+        let allRecords = [];
+        let selectedIds = new Set();
+
+        async function loadHistory() {
+            const tbody = document.getElementById('history-tbody');
+            try {
+                const resp = await fetch('/api/history');
+                if (!resp.ok) throw new Error('API 请求失败');
+                allRecords = await resp.json();
+                renderTable(allRecords);
+                renderSummary(allRecords);
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan="13" class="px-6 py-16 text-center text-slate-400 text-sm">
+                    <span class="material-symbols-outlined align-middle mr-1 text-red-400">error</span>
+                    加载失败，请刷新页面重试</td></tr>`;
+            }
+        }
+
+        // ─── 摘要卡片 ────────────────────────────────────────────
+        function renderSummary(records) {
+            document.getElementById('stat-total').textContent = records.length;
+            if (records.length === 0) {
+                ['stat-win-rate', 'stat-best', 'stat-worst'].forEach(id => {
+                    document.getElementById(id).textContent = '—';
+                });
+                return;
+            }
+            const avgWin = (records.reduce((s, r) => s + (r.win_rate || 0), 0) / records.length).toFixed(1);
+            document.getElementById('stat-win-rate').textContent = avgWin + '%';
+
+            const returns = records.map(r => r.strategy_return || 0);
+            const best = Math.max(...returns);
+            const worst = Math.min(...returns);
+            const bestEl = document.getElementById('stat-best');
+            const worstEl = document.getElementById('stat-worst');
+            bestEl.textContent = (best >= 0 ? '+' : '') + best.toFixed(2) + '%';
+            worstEl.textContent = (worst >= 0 ? '+' : '') + worst.toFixed(2) + '%';
+            bestEl.className = 'text-2xl font-black ' + (best >= 0 ? 'up' : 'down');
+            worstEl.className = 'text-2xl font-black ' + (worst < 0 ? 'down' : 'up');
+        }
+
+        // ─── 表格渲染 ────────────────────────────────────────────
+        function badgeClass(strategy) {
+            const map = { rsv: 'badge-rsv', brick: 'badge-brick', small_bank: 'badge-small_bank' };
+            return map[strategy] || 'badge-other';
+        }
+        function colorClass(val) {
+            if (val > 0) return 'up font-bold';
+            if (val < 0) return 'down font-bold';
+            return 'zero';
+        }
+        function fmtDate(iso) {
+            if (!iso) return '—';
+            return iso.replace('T', '\n').slice(0, 16).replace('T', '\n');
+        }
+        function fmtPeriod(days) {
+            if (days >= 365) return Math.floor(days / 365) + ' 年';
+            if (days >= 30) return Math.floor(days / 30) + ' 个月';
+            return days + ' 天';
+        }
+
+        function renderTable(records) {
+            const tbody = document.getElementById('history-tbody');
+            document.getElementById('footer-info').textContent = `共 ${records.length} 条记录`;
+
+            if (records.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="13" class="px-6 py-20 text-center">
+                    <div class="flex flex-col items-center gap-3">
+                        <span class="material-symbols-outlined text-slate-300 text-5xl">history</span>
+                        <p class="text-slate-400 text-sm">暂无历史回测记录</p>
+                        <a href="/" class="text-sm text-primary font-medium hover:underline">去新建回测 →</a>
+                    </div>
+                </td></tr>`;
+                return;
+            }
+
+            let html = '';
+            records.forEach((r, idx) => {
+                const ret = r.strategy_return || 0;
+                const avgP = r.avg_profit || 0;
+                const wr = r.win_rate || 0;
+                const maxP = r.max_profit || 0;
+                const maxL = r.max_loss || 0;
+                const isChk = selectedIds.has(r.id);
+                const dtParts = (r.created_at || '').split('T');
+
+                html += `
+                <tr class="row-hover fade-in transition-colors" data-id="${r.id}" style="animation-delay:${idx * 0.03}s">
+                    <td class="px-5 py-4" onclick="event.stopPropagation()">
+                        <input type="checkbox" class="row-check rounded text-primary focus:ring-primary border-slate-300 cursor-pointer w-4 h-4"
+                            data-id="${r.id}" ${isChk ? 'checked' : ''} />
+                    </td>
+                    <td class="px-5 py-4 text-slate-400 font-mono text-xs">${records.length - idx}</td>
+                    <td class="px-5 py-4">
+                        <span class="badge ${badgeClass(r.strategy)}">${r.strategy_name || r.strategy}</span>
+                    </td>
+                    <td class="px-5 py-4 text-xs text-slate-500 font-mono leading-relaxed">
+                        ${dtParts[0] || '—'}<br/>
+                        <span class="text-slate-400">${(dtParts[1] || '').slice(0, 5)}</span>
+                    </td>
+                    <td class="px-5 py-4 text-xs text-slate-600 font-mono">
+                        ${r.start_date || '—'}<br/><span class="text-slate-400">${r.end_date || ''}</span>
+                    </td>
+                    <td class="px-5 py-4 text-center">
+                        <span class="inline-block px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-medium">${fmtPeriod(r.period_days || 0)}</span>
+                    </td>
+                    <td class="px-5 py-4 text-right ${colorClass(ret)}">${ret >= 0 ? '+' : ''}${ret.toFixed(2)}%</td>
+                    <td class="px-5 py-4 text-right ${colorClass(avgP)}">${avgP >= 0 ? '+' : ''}${avgP.toFixed(2)}%</td>
+                    <td class="px-5 py-4 text-right font-semibold text-slate-700">${wr.toFixed(1)}%</td>
+                    <td class="px-5 py-4 text-right up">+${maxP.toFixed(2)}%</td>
+                    <td class="px-5 py-4 text-right down">${maxL.toFixed(2)}%</td>
+                    <td class="px-5 py-4 text-center">
+                        <span class="inline-block px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-xs font-mono">${r.total_trades || 0}</span>
+                    </td>
+                    <td class="px-5 py-4" onclick="event.stopPropagation()">
+                        <button class="del-btn p-1 rounded hover:bg-red-50 text-slate-300 hover:text-red-400 transition-colors"
+                            onclick="confirmDelete('${r.id}', '${(r.strategy_name || '').replace(/'/g, '')}')">
+                            <span class="material-symbols-outlined text-base">delete</span>
+                        </button>
+                    </td>
+                </tr>`;
+            });
+            tbody.innerHTML = html;
+
+            // 绑定行点击 → 跳转报告
+            tbody.querySelectorAll('tr[data-id]').forEach(row => {
+                row.addEventListener('click', () => {
+                    const id = row.dataset.id;
+                    window.location.href = `/report?history_id=${id}`;
+                });
+            });
+
+            // 绑定复选框
+            tbody.querySelectorAll('.row-check').forEach(cb => {
+                cb.addEventListener('change', () => {
+                    const id = cb.dataset.id;
+                    if (cb.checked) selectedIds.add(id);
+                    else selectedIds.delete(id);
+                    updateSelectActions();
+                });
+            });
+        }
+
+        // ─── 搜索 & 过滤 ────────────────────────────────────────
+        function getFiltered() {
+            const q = document.getElementById('search-input').value.trim().toLowerCase();
+            const s = document.getElementById('filter-strategy').value;
+            return allRecords.filter(r => {
+                const nameMatch = !q || (r.strategy_name || '').toLowerCase().includes(q);
+                const stratMatch = !s || r.strategy === s;
+                return nameMatch && stratMatch;
+            });
+        }
+
+        document.getElementById('search-input').addEventListener('input', () => renderTable(getFiltered()));
+        document.getElementById('filter-strategy').addEventListener('change', () => renderTable(getFiltered()));
+        document.getElementById('btn-refresh').addEventListener('click', () => {
+            selectedIds.clear();
+            updateSelectActions();
+            loadHistory();
+        });
+
+        // ─── 全选 ────────────────────────────────────────────────
+        document.getElementById('check-all').addEventListener('change', function () {
+            const filtered = getFiltered();
+            if (this.checked) filtered.forEach(r => selectedIds.add(r.id));
+            else filtered.forEach(r => selectedIds.delete(r.id));
+            renderTable(filtered);
+            updateSelectActions();
+        });
+
+        function updateSelectActions() {
+            const area = document.getElementById('select-actions');
+            const cnt = document.getElementById('selected-count');
+            if (selectedIds.size > 0) {
+                area.classList.remove('hidden');
+                area.classList.add('flex');
+                cnt.textContent = `已选 ${selectedIds.size} 条`;
+            } else {
+                area.classList.add('hidden');
+                area.classList.remove('flex');
+            }
+        }
+
+        // ─── 删除逻辑 ────────────────────────────────────────────
+        let _pendingDeleteIds = [];
+
+        function confirmDelete(id, name) {
+            _pendingDeleteIds = [id];
+            document.getElementById('modal-title').textContent = '确认删除';
+            document.getElementById('modal-body').textContent = `确定要删除「${name}」这条回测记录吗？此操作无法撤销。`;
+            document.getElementById('delete-modal').classList.remove('hidden');
+        }
+
+        document.getElementById('btn-batch-delete').addEventListener('click', () => {
+            _pendingDeleteIds = [...selectedIds];
+            document.getElementById('modal-title').textContent = `批量删除 ${_pendingDeleteIds.length} 条`;
+            document.getElementById('modal-body').textContent = `确定要删除已选的 ${_pendingDeleteIds.length} 条回测记录吗？此操作无法撤销。`;
+            document.getElementById('delete-modal').classList.remove('hidden');
+        });
+
+        document.getElementById('modal-cancel').addEventListener('click', () => {
+            document.getElementById('delete-modal').classList.add('hidden');
+        });
+
+        document.getElementById('modal-confirm').addEventListener('click', async () => {
+            document.getElementById('delete-modal').classList.add('hidden');
+            await Promise.all(_pendingDeleteIds.map(id =>
+                fetch(`/api/history/${id}`, { method: 'DELETE' })
+            ));
+            selectedIds.clear();
+            updateSelectActions();
+            loadHistory();
+        });
+
+        // ─── 初始化 ──────────────────────────────────────────────
+        loadHistory();
+    </script>
+</body>
+
+</html>

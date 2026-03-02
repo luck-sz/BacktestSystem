@@ -3,7 +3,6 @@ backtest.py — 通用 A股横截面回测引擎
 
 支持策略：
   - rsv   : RSV背离 + 缩量轮动（短期超跌反弹）
-  - ma    : 5日强平动量（MA金叉买入，盈利或满5天卖出）
   - brick : 砖型图打分（KDJ超卖 + MA60趋势 + 砖型柱反转）
 """
 
@@ -30,7 +29,6 @@ RENAME_MAP = {
 
 STRATEGY_NAMES = {
     "rsv":   "RSV背离+缩量轮动策略",
-    "ma":    "5日强平动量策略",
     "brick": "砖型图打分策略",
     "small_bank": "小市值+银行轮动(实盘优化版)",
 }
@@ -50,17 +48,6 @@ def _calc_rsv(df: pd.DataFrame) -> pd.DataFrame:
     df["rsv_short"] = (df["close"] - low3)   / (high3  - low3   + 1e-9) * 100
 
     df["vol_ratio"] = df["volume"] / df["volume"].shift(1).replace(0, np.nan)
-    return df
-
-
-def _calc_ma(df: pd.DataFrame) -> pd.DataFrame:
-    """MA金叉动量策略指标"""
-    df["sma5"]  = df["close"].rolling(5).mean()
-    df["sma20"] = df["close"].rolling(20).mean()
-    df["buy_signal"] = (
-        (df["sma5"] >  df["sma20"]) &
-        (df["sma5"].shift(1) <= df["sma20"].shift(1))
-    )
     return df
 
 
@@ -111,12 +98,12 @@ def _calc_small_bank(df: pd.DataFrame) -> pd.DataFrame:
     df["avg_turnover20"] = df["turnover"].rolling(20, min_periods=1).mean()
     df["max_vol120"] = df["volume"].rolling(120, min_periods=1).max()
     df["days_listed"] = np.arange(len(df))
+    df["prev_close"] = df["close"].shift(1)
     return df
 
 
 _INDICATOR_FUNCS = {
     "rsv":   _calc_rsv,
-    "ma":    _calc_ma,
     "brick": _calc_brick,
     "small_bank": _calc_small_bank,
 }
@@ -132,24 +119,32 @@ def _load_single_file(args: tuple) -> tuple[str, str, pd.DataFrame | None]:
     同步地加载并预处理单只股票 CSV。
     返回 (stock_code, stock_name, df_or_None)
     """
-    file_path, strategy, start_ts, end_ts = args
+    file_path, strategy, start_ts, end_ts, exclude_boards = args
     stock_code = os.path.basename(file_path).replace(".csv", "")
     calc_fn    = _INDICATOR_FUNCS.get(strategy)
     if calc_fn is None:
         return stock_code, "", None
 
     try:
-        df = pd.read_csv(file_path)
+        df = pd.read_csv(file_path, usecols=lambda c: c in RENAME_MAP)
         if df.empty or len(df) < MIN_ROWS:
             return stock_code, "", None
 
         df.rename(columns=RENAME_MAP, inplace=True)
         stock_name = str(df["name"].iloc[0]) if "name" in df.columns else stock_code
 
-        df["date"] = pd.to_datetime(df["date"].astype(str), errors="coerce")
+        # 检查是否由于名字带 ST/退 等情况被排除
+        if exclude_boards and "st" in exclude_boards:
+            if "ST" in stock_name or "退" in stock_name:
+                return stock_code, stock_name, None
+
+        df["date"] = pd.to_datetime(df["date"].astype(str), format="%Y%m%d", errors="coerce")
         df.dropna(subset=["date"], inplace=True)
         df.sort_values("date", inplace=True)
         df.reset_index(drop=True, inplace=True)
+
+        # 记录全历史交易日数（在截取前），用于次新股过滤
+        total_trading_days = len(df)
 
         df = calc_fn(df)
 
@@ -157,10 +152,12 @@ def _load_single_file(args: tuple) -> tuple[str, str, pd.DataFrame | None]:
         df = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
         if df.empty:
             return stock_code, stock_name, None
-        
-        # 补齐最新几天可能缺失的字段，确保后续计算安全
+
+        # 写入全历史天数，供 _select_candidates 过滤次新股
+        df["total_trading_days"] = total_trading_days
+
         df.set_index("date", inplace=True)
-        return stock_code, stock_name, df
+        return stock_code, stock_name, df.reset_index().to_dict("list")
 
     except Exception:
         return stock_code, "", None
@@ -179,6 +176,7 @@ async def run_backtest_async(
     strategy:        str   = "rsv",
     initial_capital: float = 100_000.0,
     max_positions:   int   = 2,
+    exclude_boards:  list[str] = None
 ) -> dict | None:
     """
     异步横截面回测主函数。
@@ -198,11 +196,23 @@ async def run_backtest_async(
 
     # ── 1. 扫描 CSV 文件列表 ──
     csv_files: list[str] = []
+    
+    exclude_boards = exclude_boards or []
+    
     for root, _, files in os.walk(data_dir):
         if "大盘" in root:
             continue
         for f in files:
             if f.endswith(".csv") and f[:6].isdigit():
+                code = f[:6]
+                # 板块过滤（在文件扫描阶段快速排除，减少 I/O）
+                if "kc"  in exclude_boards and code.startswith("688"):
+                    continue
+                if "cy"  in exclude_boards and (code.startswith("300") or code.startswith("301")):
+                    continue
+                if "bse" in exclude_boards and (code.startswith("4") or code.startswith("8")):
+                    continue
+                # ST/退市 通过名字过滤，在 _load_single_file 内处理
                 csv_files.append(os.path.join(root, f))
 
     if not csv_files:
@@ -214,7 +224,7 @@ async def run_backtest_async(
 
     start_ts = pd.Timestamp(start_date)
     end_ts   = pd.Timestamp(end_date)
-    args_list = [(fp, strategy, start_ts, end_ts) for fp in csv_files]
+    args_list = [(fp, strategy, start_ts, end_ts, exclude_boards) for fp in csv_files]
 
     # ── 2. 并发预加载 & 指标计算（使用进程池避免 GIL） ──
     stock_data:  dict[str, pd.DataFrame] = {}
@@ -232,8 +242,10 @@ async def run_backtest_async(
                 _batch_load,
                 batch,
             )
-            for code, name, df in results:
-                if df is not None:
+            for code, name, df_dict in results:
+                if df_dict is not None:
+                    df = pd.DataFrame(df_dict)
+                    df.set_index("date", inplace=True)
                     stock_data[code]  = df
                     stock_names[code] = name
                     all_dates.update(df.index)
@@ -375,8 +387,24 @@ async def run_backtest_async(
                             curr_vol = float(df.loc[current_date, "volume"])
                             if max_vol > 0 and curr_vol > max_vol * 0.9:
                                 sell_reason = f"放量卖出(放量至新高90%以上)"
+                    elif hold_days >= 5:
+                        sell_reason = "持仓满5天无条件清仓(时间止损)"
+            elif strategy == "brick":
+                if hold_days >= 1:
+                    open_p = float(df.loc[current_date, "open"])
+                    open_profit = (open_p - info["buy_price"]) / info["buy_price"] * 100
+                    if open_profit > 1.0:
+                        sell_price = open_p
+                        profit_pct = open_profit
+                        sell_reason = "次日早盘开盘盈利超1%止盈"
+                    else:
+                        sell_reason = "次日尾盘14:55无条件清仓"
+                elif hold_days >= 5:
+                    sell_reason = "持仓满5天强制清仓(风控)"
             else:
                 sell_reason = _judge_sell(strategy, hold_days, profit_pct)
+                if not sell_reason and hold_days >= 5:
+                    sell_reason = "持仓满5天兜底强制清仓"
             if sell_reason:
                 trade_data = {
                     "代码":     stock,
@@ -401,7 +429,8 @@ async def run_backtest_async(
         available_slots = max_positions - len(held_stocks)
         if available_slots > 0:
             buy_list = _select_candidates(
-                strategy, stock_data, held_stocks, current_date, available_slots
+                strategy, stock_data, held_stocks, current_date, available_slots,
+                exclude_boards,
             )
 
     # ── 4. 汇总统计 ──
@@ -448,27 +477,50 @@ def _judge_sell(strategy: str, hold_days: int, profit_pct: float) -> str | None:
     if strategy == "rsv":
         if hold_days >= 2:
             return "持仓满2天尾盘卖出"
-    elif strategy == "ma":
-        if profit_pct > 0.2:
-            return "盈利卖出(模拟14:55)"
-        if hold_days >= 5:
-            return "持仓满5天强制卖出"
-    elif strategy == "brick":
-        if profit_pct > 0:
-            return "盈利卖出"
-        if hold_days >= 5:
-            return "持仓满5天强制卖出"
     return None
 
 
 def _select_candidates(
-    strategy:    str,
-    stock_data:  dict[str, pd.DataFrame],
-    held_stocks: dict[str, dict],
+    strategy:       str,
+    stock_data:     dict[str, pd.DataFrame],
+    held_stocks:    dict[str, dict],
     current_date,
     available_slots: int,
+    exclude_boards: list[str] | None = None,
 ) -> list[str]:
     """盘后选股，返回次日计划买入的股票列表"""
+    exclude_boards = exclude_boards or []
+
+    # ── 解析带参数的过滤条件 ──
+    new_min_days     = None
+    lowprice_limit   = None
+    highprice_limit  = None
+    lowvol_limit     = None   # 万元
+    mktcap_min_limit = None   # 亿元
+    mktcap_max_limit = None   # 亿元
+
+    for item in exclude_boards:
+        if item.startswith("new:"):
+            try: new_min_days = int(item.split(":")[1])
+            except: new_min_days = 365
+        elif item.startswith("lowprice:"):
+            try: lowprice_limit = float(item.split(":")[1])
+            except: lowprice_limit = 3.0
+        elif item.startswith("highprice:"):
+            try: highprice_limit = float(item.split(":")[1])
+            except: highprice_limit = 200.0
+        elif item.startswith("lowvol:"):
+            try: lowvol_limit = float(item.split(":")[1]) * 10000  # 万元转元
+            except: lowvol_limit = 2000 * 10000
+        elif item.startswith("mktcap_min:"):
+            try: mktcap_min_limit = float(item.split(":")[1])
+            except: mktcap_min_limit = 20.0
+        elif item.startswith("mktcap_max:"):
+            try: mktcap_max_limit = float(item.split(":")[1])
+            except: mktcap_max_limit = 200.0
+
+    filter_suspended = "suspended" in exclude_boards
+
     candidates: list[dict] = []
 
     for stock, df in stock_data.items():
@@ -476,16 +528,59 @@ def _select_candidates(
             continue
         row = df.loc[current_date]
 
+        # ── 通用过滤（对所有策略生效）──
+        # 停牌过滤
+        if filter_suspended:
+            vol = row.get("volume", 1)
+            if pd.notnull(vol) and float(vol) == 0:
+                continue
+
+        # 次新股过滤（使用全历史交易日数）
+        if new_min_days is not None:
+            total_days = row.get("total_trading_days", row.get("days_listed", 9999))
+            if pd.notnull(total_days) and float(total_days) < new_min_days:
+                continue
+
+        # 低价股过滤
+        if lowprice_limit is not None:
+            close = row.get("close", 0)
+            if pd.notnull(close) and float(close) < lowprice_limit:
+                continue
+
+        # 高价股过滤
+        if highprice_limit is not None:
+            close = row.get("close", 0)
+            if pd.notnull(close) and float(close) > highprice_limit:
+                continue
+        
+        # 获取日均成交额用于流动性和市值过滤
+        avg_t = row.get("avg_turnover20")
+        if avg_t is None:
+            close = float(row.get("close", 0) or 0)
+            vol   = float(row.get("volume", 0) or 0)
+            avg_t = close * vol # 估算
+
+        # 低流动性过滤（日均成交额)
+        if lowvol_limit is not None:
+            if pd.notnull(avg_t) and float(avg_t) < lowvol_limit:
+                continue
+
+        # 市值过滤（市值 = 日均成交额 / 0.02）
+        # 换算关系：threshold_yi * 1e8 * 0.02 = threshold_yi * 2e6
+        if pd.notnull(avg_t):
+            if mktcap_min_limit is not None:
+                if float(avg_t) < mktcap_min_limit * 2_000_000:
+                    continue
+            if mktcap_max_limit is not None:
+                if float(avg_t) > mktcap_max_limit * 2_000_000:
+                    continue
+
+        # ── 策略专属选股逻辑 ──
         if strategy == "rsv":
             rl = row.get("rsv_long");  rs = row.get("rsv_short"); vr = row.get("vol_ratio")
             if pd.notnull(rl) and pd.notnull(rs) and pd.notnull(vr):
                 if rl >= 80 and rs <= 20 and vr > 0:
                     candidates.append({"stock": stock, "score": float(vr)})
-
-        elif strategy == "ma":
-            sig = row.get("buy_signal")
-            if pd.notnull(sig) and sig:
-                candidates.append({"stock": stock, "score": 1.0})
 
         elif strategy == "brick":
             sig = row.get("buy_signal")
@@ -493,12 +588,12 @@ def _select_candidates(
                 candidates.append({"stock": stock, "score": float(row.get("brick_score", 0))})
 
         elif strategy == "small_bank":
-            # 过滤不可交易小票规则
+            # small_bank 自带板块过滤（北交所/科创/创业等已在顶层过滤，此处保留兜底）
             if stock.startswith(("4", "8", "68", "30")):
                 continue
-            if row.get("days_listed", 0) < 375:
+            # 次新股已由通用过滤处理；若用户未勾选，仍执行策略内置的 375-day 过滤
+            if new_min_days is None and row.get("days_listed", 0) < 375:
                 continue
-            # 近似使用近20日平均成交额作为流通市值的平替
             turnover = row.get("avg_turnover20")
             if pd.notnull(turnover) and turnover > 0:
                 candidates.append({"stock": stock, "score": float(turnover)})
@@ -512,12 +607,10 @@ def _select_candidates(
                 if b_df is not None and current_date in b_df.index:
                     b_row = b_df.loc[current_date]
                     if b_row["close"] > 0:
-                        close_prices = b_df.loc[:current_date, "close"]
-                        if len(close_prices) > 1:
-                            prev_close = float(close_prices.iloc[-2])
-                            if prev_close > 0:
-                                ratio = float(b_row["close"]) / prev_close
-                                bank_cands.append({"stock": b, "score": ratio})
+                        prev_close = float(b_row.get("prev_close", 0.0))
+                        if prev_close > 0:
+                            ratio = float(b_row["close"]) / prev_close
+                            bank_cands.append({"stock": b, "score": ratio})
             if bank_cands:
                 bank_cands.sort(key=lambda x: x["score"])
                 if len(bank_cands) > 1 and (bank_cands[-1]["score"] - bank_cands[0]["score"] > 0.005):
@@ -539,7 +632,7 @@ def _select_candidates(
         candidates.sort(key=lambda x: x["score"])
         return [c["stock"] for c in candidates[:available_slots]]
     else:
-        # MA / Brick：按得分从高到低排序
+        # Brick：按得分从高到低排序
         candidates.sort(key=lambda x: x["score"], reverse=True)
         return [c["stock"] for c in candidates[:available_slots]]
 
