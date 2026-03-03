@@ -20,3 +20,9 @@ env/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 结果历史
+backtest_history/
+
+# 日志文件
+profile*.txt

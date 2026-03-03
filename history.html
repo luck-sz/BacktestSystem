@@ -123,24 +123,39 @@
 
     <!-- 顶栏 -->
     <header
-        class="flex items-center justify-between whitespace-nowrap border-b border-surface-border px-8 py-3 bg-white sticky top-0 z-50 shadow-sm">
-        <div class="flex items-center gap-4">
-            <div class="size-8 text-primary flex items-center justify-center cursor-pointer"
-                onclick="window.location.href='/'">
-                <span class="material-symbols-outlined text-3xl">query_stats</span>
+        class="flex items-center justify-between whitespace-nowrap border-b border-solid border-slate-200 px-6 py-3 bg-white sticky top-0 z-50 shadow-sm">
+        <div class="flex items-center gap-8">
+            <div class="flex items-center gap-3 text-text-main">
+                <div class="size-8 text-primary" onclick="window.location.href='/'">
+                    <span class="material-symbols-outlined !text-3xl">query_stats</span>
+                </div>
+                <h2 class="text-xl font-bold leading-tight tracking-[-0.015em] cursor-pointer"
+                    onclick="window.location.href='/'">策略回测工作台</h2>
             </div>
-            <h2 class="text-slate-900 text-lg font-bold leading-tight tracking-[-0.015em]">策略回测工作台</h2>
-            <nav class="hidden md:flex items-center gap-6 ml-4">
-                <a class="text-text-secondary hover:text-primary text-sm font-medium transition-colors"
-                    href="/">新建回测</a>
-                <a class="text-primary text-sm font-semibold border-b-2 border-primary pb-0.5" href="/history">回测历史</a>
+            <nav class="hidden md:flex items-center gap-6">
+                <a class="text-text-muted hover:text-primary text-sm font-medium transition-colors" href="/">新建回测</a>
+                <a class="text-text-muted hover:text-primary text-sm font-medium transition-colors"
+                    href="/select">每日选股</a>
+                <a class="text-primary text-sm font-bold" href="/history">回测历史</a>
             </nav>
         </div>
-        <div class="flex gap-3">
-            <button onclick="window.location.href='/'"
-                class="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors shadow-md shadow-primary/20">
-                <span class="material-symbols-outlined text-lg">add</span>新建回测
+        <div class="flex items-center gap-4">
+            <div
+                class="hidden sm:flex w-64 items-center rounded-lg bg-slate-100 border border-transparent focus-within:border-primary transition-colors focus-within:bg-white focus-within:ring-2 focus-within:ring-primary/20">
+                <div class="pl-3 text-slate-400 flex items-center justify-center">
+                    <span class="material-symbols-outlined text-xl">search</span>
+                </div>
+                <input
+                    class="w-full bg-transparent border-none text-sm text-text-main placeholder:text-slate-400 focus:ring-0 h-9"
+                    placeholder="搜索详情..." />
+            </div>
+            <button class="flex items-center justify-center text-text-muted hover:text-primary transition-colors">
+                <span class="material-symbols-outlined">notifications</span>
             </button>
+            <div class="size-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs cursor-pointer border border-primary/20"
+                title="用户资料">
+                JD
+            </div>
         </div>
     </header>
 

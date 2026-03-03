@@ -20,10 +20,11 @@ import json
 import os
 import uuid
 
+from typing import Any, Callable, Coroutine
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
-from backtest import run_backtest_async, STRATEGY_NAMES
+from backtest import run_backtest_async, select_stocks_async, STRATEGY_NAMES
 
 app = FastAPI(title="A股回测分析工作台", version="1.0.0")
 
@@ -33,8 +34,8 @@ HISTORY_DIR = os.path.join(BASE_DIR, "backtest_history")
 os.makedirs(HISTORY_DIR, exist_ok=True)
 
 # ── 全局状态 ──────────────────────────────────────────────
-_last_result: dict = {"stats": {}, "trades": []}
 _is_running   = False   # 防止并发重复提交
+_last_selection_results = {}
 
 
 # ── 历史记录工具函数 ──────────────────────────────────────
@@ -142,6 +143,11 @@ async def report():
 @app.get("/history", response_class=HTMLResponse)
 async def history_page():
     return _read_html("history.html")
+
+
+@app.get("/select", response_class=HTMLResponse)
+async def select_page():
+    return _read_html("select.html")
 
 
 # ── API 路由 ──────────────────────────────────────────────
@@ -278,6 +284,74 @@ async def start_backtest(request: Request):
                 break
 
             yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":    "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/select_stocks")
+async def api_select_stocks(request: Request):
+    """获取最后一次选股结果 API。"""
+    return JSONResponse(_last_selection_results)
+
+
+@app.get("/api/start_select_stocks")
+async def api_start_select_stocks(request: Request):
+    """开启选股任务并推送进度 (SSE)。"""
+    p = request.query_params
+    target_date = p.get("date", "2026-03-02")
+    strategy = p.get("strategy", "brick").lower()
+    exclude_boards_str = p.get("exclude", "")
+    exclude_boards = [x.strip() for x in exclude_boards_str.split(",") if x.strip()]
+
+    async def event_generator():
+        # 用于接收日志回调的对列
+        queue = asyncio.Queue()
+
+        async def log_cb(level: str, msg: Any):
+            await queue.put({"level": level, "message": msg})
+
+        # 在后台启动选股逻辑
+        select_task = asyncio.create_task(select_stocks_async(
+            os.path.join(BASE_DIR, "all_stock_data"),
+            target_date,
+            strategy,
+            exclude_boards,
+            log_cb
+        ))
+
+        while True:
+            try:
+                # 尝试从队列中获取消息，并设置超时，避免死循环造成 CPU 占用过高
+                msg = await asyncio.wait_for(queue.get(), timeout=0.1)
+                yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
+            except asyncio.TimeoutError:
+                pass
+
+            if select_task.done():
+                try:
+                    results = await select_task
+                    # 保存到全局状态供前端后续拉取
+                    _last_selection_results.clear()
+                    _last_selection_results.update({
+                        "date": target_date,
+                        "strategy": strategy,
+                        "count": len(results),
+                        "data": results,
+                        "status": "success"
+                    })
+                    yield "data: DONE\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'level': 'ERROR', 'message': f'选股异常: {str(e)}'}, ensure_ascii=False)}\n\n"
+                break
+
+            await asyncio.sleep(0.1)
 
     return StreamingResponse(
         event_generator(),

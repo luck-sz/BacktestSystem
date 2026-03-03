@@ -80,7 +80,8 @@ def _calc_brick(df: pd.DataFrame) -> pd.DataFrame:
     b1 = df["brick"].shift(1)
     b2 = df["brick"].shift(2)
 
-    color_ok    = (b1 < b2) & (b0 > b1)
+    # color_ok: 要求指标出现 V 型反向，且回调深度超过 3%（避免 000913 这种微小抖动）
+    color_ok    = (b1 < b2) & (b0 > b1) & (b1 < b2 * 0.97)
     trend_ok    = df["close"] > df["ma60"]
     oversold_ok = df["j"].shift(1).rolling(5).min() < 0
     red_len     = b0 - b1
@@ -135,7 +136,8 @@ def _load_single_file(args: tuple) -> tuple[str, str, pd.DataFrame | None]:
 
         # 检查是否由于名字带 ST/退 等情况被排除
         if exclude_boards and "st" in exclude_boards:
-            if "ST" in stock_name or "退" in stock_name:
+            name_upper = stock_name.upper()
+            if "ST" in name_upper or "退" in name_upper:
                 return stock_code, stock_name, None
 
         df["date"] = pd.to_datetime(df["date"].astype(str), format="%Y%m%d", errors="coerce")
@@ -589,7 +591,7 @@ def _select_candidates(
 
         elif strategy == "small_bank":
             # small_bank 自带板块过滤（北交所/科创/创业等已在顶层过滤，此处保留兜底）
-            if stock.startswith(("4", "8", "68", "30")):
+            if stock.startswith(("4", "8", "9", "68", "30")):
                 continue
             # 次新股已由通用过滤处理；若用户未勾选，仍执行策略内置的 375-day 过滤
             if new_min_days is None and row.get("days_listed", 0) < 375:
@@ -635,6 +637,98 @@ def _select_candidates(
         # Brick：按得分从高到低排序
         candidates.sort(key=lambda x: x["score"], reverse=True)
         return [c["stock"] for c in candidates[:available_slots]]
+
+
+
+async def select_stocks_async(
+    data_dir:       str,
+    target_date:    str,
+    strategy:       str = "brick",
+    exclude_boards: list[str] = None,
+    log_callback:   LogCallback = None
+) -> list[dict]:
+    """
+    每日选股入口：根据指定日期，筛选出符合策略信号的公开股票。
+    """
+    async def log(level: str, msg: Any):
+        if log_callback:
+            await log_callback(level, msg)
+
+    target_ts = pd.Timestamp(target_date)
+    exclude_boards = exclude_boards or []
+
+    await log("INFO", f"开始处理 {target_date} 的选股任务，策略：{strategy}，排除板块：{exclude_boards}...")
+
+    # 1. 扫描文件
+    csv_files: list[str] = []
+    for root, _, files in os.walk(data_dir):
+        if "大盘" in root: continue
+        for f in files:
+            if f.endswith(".csv") and f[:6].isdigit():
+                code = f[:6]
+                if "kc" in exclude_boards and code.startswith("688"): continue
+                if "cy" in exclude_boards and (code.startswith("300") or code.startswith("301")): continue
+                if "bse" in exclude_boards and (code.startswith("4") or code.startswith("8") or code.startswith("9")): continue
+                csv_files.append(os.path.join(root, f))
+
+    if not csv_files:
+        await log("WARN", "未找到有效的股票数据文件。")
+        return []
+
+    total_files = len(csv_files)
+    await log("INFO", f"共扫描到 {total_files} 只个股，准备计算技术指标...")
+
+    # 2. 并发加载 & 计算指标
+    start_ts = target_ts - pd.Timedelta(days=120) 
+    args_list = [(fp, strategy, start_ts, target_ts, exclude_boards) for fp in csv_files]
+
+    stock_data:  dict[str, pd.DataFrame] = {}
+    stock_names: dict[str, str]          = {}
+
+    BATCH = 300
+    loop = asyncio.get_event_loop()
+    with ProcessPoolExecutor() as executor:
+        for batch_start in range(0, total_files, BATCH):
+            batch = args_list[batch_start: batch_start + BATCH]
+            results = await loop.run_in_executor(executor, _batch_load, batch)
+            
+            for code, name, df_dict in results:
+                if df_dict is not None:
+                    df = pd.DataFrame(df_dict)
+                    df.set_index("date", inplace=True)
+                    stock_data[code]  = df
+                    stock_names[code] = name
+            
+            loaded = min(batch_start + BATCH, total_files)
+            progress = int(loaded / total_files * 100)
+            await log("DEBUG", f"指标计算进度: {loaded}/{total_files} ({progress}%)")
+            await asyncio.sleep(0)
+
+    await log("INFO", f"数据处理完成，正在执行全市场跨截面筛选...")
+
+    # 3. 选股筛选
+    selected_codes = _select_candidates(
+        strategy, stock_data, {}, target_ts, available_slots=100,
+        exclude_boards=exclude_boards
+    )
+
+    # 4. 封装结果
+    final_results = []
+    for code in selected_codes:
+        df = stock_data[code]
+        if target_ts not in df.index:
+            continue
+        row = df.loc[target_ts]
+        final_results.append({
+            "code": code,
+            "name": stock_names.get(code, code),
+            "close": round(float(row.get("close", 0)), 2),
+            "score": round(float(row.get("brick_score", 0)) if strategy == "brick" else 0, 2),
+            "signal": "买入"
+        })
+
+    await log("INFO", f"选股任务结束，共筛选出 {len(final_results)} 只符合条件的个股。")
+    return final_results
 
 
 # ─────────────────────── CLI 入口 ───────────────────────
