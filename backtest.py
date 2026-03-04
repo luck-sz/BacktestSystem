@@ -98,7 +98,9 @@ def _calc_small_bank(df: pd.DataFrame) -> pd.DataFrame:
     df["turnover"] = df["close"] * df["volume"]
     df["avg_turnover20"] = df["turnover"].rolling(20, min_periods=1).mean()
     df["max_vol120"] = df["volume"].rolling(120, min_periods=1).max()
-    df["days_listed"] = np.arange(len(df))
+    # days_listed 由外层统筹提供，避免在此处受截断影响
+    if "days_listed" not in df.columns:
+        df["days_listed"] = np.arange(len(df))
     df["prev_close"] = df["close"].shift(1)
     return df
 
@@ -140,17 +142,34 @@ def _load_single_file(args: tuple) -> tuple[str, str, pd.DataFrame | None]:
             if "ST" in name_upper or "退" in name_upper:
                 return stock_code, stock_name, None
 
-        df["date"] = pd.to_datetime(df["date"].astype(str), format="%Y%m%d", errors="coerce")
-        df.dropna(subset=["date"], inplace=True)
-        df.sort_values("date", inplace=True)
-        df.reset_index(drop=True, inplace=True)
-
         # 记录全历史交易日数（在截取前），用于次新股过滤
         total_trading_days = len(df)
 
+        # ====== 核心性能优化：预先过滤无关历史数据 ======
+        # 预留 500 天(自然日)作为指标滚动（如MA120, EWM）预热空间
+        warmup_days = pd.Timedelta(days=500)
+        min_date_int = int((start_ts - warmup_days).strftime("%Y%m%d"))
+        
+        # 将原始 date 列作为数字快速剔除远古数据，大幅减少随后 to_datetime 及指标计算的耗时
+        df["_date_num"] = pd.to_numeric(df["date"], errors="coerce")
+        df = df[df["_date_num"] >= min_date_int].copy()
+        df.drop(columns=["_date_num"], inplace=True)
+
+        if df.empty or len(df) < MIN_ROWS:
+            return stock_code, stock_name, None
+
+        df["date"] = pd.to_datetime(df["date"].astype(str), format="%Y%m%d", errors="coerce")
+        df.dropna(subset=["date"], inplace=True)
+        df.sort_values("date", inplace=True)
+        df.drop_duplicates(subset=["date"], keep="last", inplace=True)  # 防止重复日期导致 loc 返回 DataFrame
+        df.reset_index(drop=True, inplace=True)
+
+        # 修复指标需要的 days_listed (保留其在全量数据中的近似绝对序号)
+        df["days_listed"] = total_trading_days - len(df) + np.arange(len(df))
+
         df = calc_fn(df)
 
-        # 必须在计算指标之后再做日期截取，保证滚动窗口完整
+        # 必须在计算指标之后再做精确的日期截取，保证滚动窗口完整且最终输出期间精准
         df = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
         if df.empty:
             return stock_code, stock_name, None
