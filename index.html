@@ -723,7 +723,7 @@
                                     <span class="text-sm font-bold">预计耗时: ~45 秒</span>
                                 </div>
 
-                                <button
+                                <button id="start-backtest-btn"
                                     class="w-full bg-white text-primary hover:bg-blue-50 py-4 rounded-xl font-black text-lg shadow-lg transition-all hover:scale-[1.02] active:scale-95 flex items-center justify-center gap-3">
                                     <span class="material-symbols-outlined font-black">play_arrow</span>
                                     开始回测
@@ -738,7 +738,7 @@
     </main>
 
     <script>
-        const startBtn = document.querySelector('button.relative.z-10.bg-white.text-primary.hover\\:bg-blue-50');
+        const startBtn = document.getElementById('start-backtest-btn');
 
         // 板块 Pill 交互
         document.querySelectorAll('.board-pill input[type="checkbox"]').forEach(input => {

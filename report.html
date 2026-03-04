@@ -316,12 +316,12 @@
         async function fetchDataAndRender() {
             try {
                 const response = await fetch('/api/get_report_data');
-                const data = await response.json();
-
-                if (data.error) {
-                    alert("回测数据读取错误: " + data.error);
+                if (!response.ok) {
+                    const errInfo = await response.json().catch(() => ({}));
+                    alert("获取数据失败: " + (errInfo.detail || response.statusText));
                     return;
                 }
+                const data = await response.json();
 
                 allTrades = [...data.trades].reverse();
 

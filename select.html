@@ -169,196 +169,569 @@
             </div>
         </aside>
 
-        <!-- 内容区：选股结果 -->
-        <section class="flex-1 bg-slate-50 min-w-0 overflow-y-auto custom-scrollbar p-8">
-            <div class="max-w-4xl mx-auto">
-                <div class="flex items-center justify-between mb-8">
-                    <div>
-                        <h1 class="text-3xl font-black text-slate-900 tracking-tight">选股结果</h1>
-                        <p id="result-info" class="text-slate-500 mt-1 font-medium">请配置参数并点击“开始选股”</p>
+        <!-- 内容区：二栏布局工作台 -->
+        <section class="flex-1 bg-slate-50 min-w-0 overflow-hidden flex flex-col p-6">
+            <div class="flex items-center justify-between mb-4 shrink-0">
+                <div>
+                    <h1 class="text-2xl font-black text-slate-900 tracking-tight">每日选股结果</h1>
+                    <p id="result-info" class="text-xs text-slate-500 mt-1 font-bold uppercase tracking-wider">
+                        调试模式：数据已就绪</p>
+                </div>
+                <div id="loading-spinner" class="hidden">
+                    <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
+                </div>
+            </div>
+
+            <!-- 选股进度日志 (迷你版) -->
+            <div id="log-console"
+                class="hidden mb-4 bg-slate-900 rounded-xl p-3 font-mono text-[10px] border border-slate-800 shadow-lg shrink-0 overflow-hidden">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-slate-500 uppercase font-black text-[9px] tracking-widest">系统日志</span>
+                    <span id="log-progress" class="text-primary font-bold">0%</span>
+                </div>
+                <div id="log-lines" class="text-slate-400 space-y-0.5 max-h-20 overflow-y-auto custom-scrollbar"></div>
+            </div>
+
+            <!-- 核心交互区 -->
+            <div class="flex-1 flex gap-6 overflow-hidden">
+                <!-- 左侧列表: 占 30% - 40% -->
+                <div
+                    class="w-[380px] flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden shrink-0">
+                    <div class="px-4 py-3 bg-slate-50/50 border-b border-slate-100 flex items-center justify-between">
+                        <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest">个股清单</span>
+                        <span id="stock-count-badge"
+                            class="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-bold">5 只</span>
                     </div>
-                    <div id="loading-spinner" class="hidden">
-                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                    <div class="flex-1 overflow-y-auto custom-scrollbar">
+                        <table class="w-full text-left border-collapse">
+                            <tbody id="result-table-body" class="divide-y divide-slate-50">
+                                <!-- 由渲染函数填充 -->
+                            </tbody>
+                        </table>
                     </div>
                 </div>
 
-                <!-- 进度日志区域 -->
-                <div id="log-console"
-                    class="hidden mb-6 bg-slate-900 rounded-xl p-4 font-mono text-xs overflow-hidden border border-slate-800 shadow-2xl">
-                    <div class="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
-                        <span class="text-slate-400 flex items-center gap-2">
-                            <span class="relative flex h-2 w-2">
-                                <span
-                                    class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                                <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                            </span>
-                            选股任务执行中...
-                        </span>
-                        <span id="log-progress" class="text-primary font-bold">0%</span>
-                    </div>
-                    <div id="log-lines"
-                        class="text-slate-300 space-y-1 max-h-40 overflow-y-auto custom-scrollbar scroll-smooth">
-                        <!-- 日志内容 -->
-                    </div>
-                </div>
+                <!-- 右侧看板: 占据剩余空间 -->
+                <div
+                    class="flex-1 flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden relative">
+                    <!-- 动态详情头部 -->
+                    <div id="detail-pane" class="flex flex-col h-full">
+                        <div class="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+                            <div class="flex items-center gap-4">
+                                <div
+                                    class="size-14 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
+                                    <span class="material-symbols-outlined !text-4xl text-primary">analytics</span>
+                                </div>
+                                <div>
+                                    <div class="flex items-center gap-2">
+                                        <h3 id="view-stock-name"
+                                            class="text-2xl font-black text-slate-900 leading-none">请选择股票</h3>
+                                        <span id="view-stock-code"
+                                            class="text-xs font-mono font-bold text-slate-400 bg-slate-100 px-2 py-1 rounded">000000</span>
+                                    </div>
+                                    <div class="flex items-center gap-3 mt-3">
+                                        <div class="flex items-center gap-1.5 text-emerald-600 font-bold text-sm">
+                                            <span class="material-symbols-outlined !text-sm">payments</span>
+                                            <span id="view-stock-price">--</span>
+                                        </div>
+                                        <div class="w-px h-3 bg-slate-200"></div>
+                                        <div class="flex items-center gap-1.5 text-slate-500 font-bold text-sm">
+                                            <span class="material-symbols-outlined !text-sm">stars</span>
+                                            <span>综合评分: <span id="view-stock-score"
+                                                    class="text-primary italic">--</span></span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
 
-                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                    <table class="w-full text-left border-collapse">
-                        <thead>
-                            <tr class="bg-slate-50 border-b border-slate-200">
-                                <th class="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">代码
-                                </th>
-                                <th class="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">名称
-                                </th>
-                                <th class="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">收盘价
-                                </th>
-                                <th
-                                    class="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">
-                                    综合得分</th>
-                                <th
-                                    class="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">
-                                    建议</th>
-                            </tr>
-                        </thead>
-                        <tbody id="result-table-body" class="divide-y divide-slate-100">
-                            <!-- 数据行将通过 JS 动态插入 -->
-                            <tr>
-                                <td colspan="5" class="px-6 py-20 text-center text-slate-400 font-medium">
-                                    暂无数据，请运行选股任务
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
+                        <!-- 图表展示区 -->
+                        <div class="flex-1 p-6 flex flex-col min-h-0">
+                            <div class="flex items-center justify-between mb-4 shrink-0">
+                                <div class="flex items-center gap-4">
+                                    <button
+                                        class="px-4 py-1.5 rounded-full bg-primary text-white text-[11px] font-black shadow-lg shadow-primary/20">日K线</button>
+                                    <button
+                                        class="px-4 py-1.5 rounded-full text-slate-400 text-[11px] font-black hover:bg-slate-100 transition-colors">分时图</button>
+                                    <button
+                                        class="px-4 py-1.5 rounded-full text-slate-400 text-[11px] font-black hover:bg-slate-100 transition-colors">F10资料</button>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <span id="chart-status"
+                                        class="text-[10px] text-slate-300 font-bold uppercase italic tracking-widest">Charts
+                                        Ready</span>
+                                </div>
+                            </div>
+
+                            <div class="flex-1 bg-white relative">
+                                <!-- MA 均线数值悬浮 (参考同花顺风格) -->
+                                <div id="ma-legend"
+                                    class="absolute left-[72px] top-[10.5%] z-10 pointer-events-none flex items-center gap-4 text-[12px] font-bold tracking-tight">
+                                    <span id="label-ma5" class="text-slate-900">MA5: --</span>
+                                    <span id="label-ma60" style="color: #2563eb">MA60: --</span>
+                                </div>
+                                <!-- KDJ 指标数值悬浮显示 (参考同花顺风格) -->
+                                <div id="kdj-legend"
+                                    class="absolute left-[72px] top-[82.2%] z-10 pointer-events-none flex items-center gap-4 text-[12px] font-bold tracking-tight">
+                                    <span class="text-slate-300">KDJ(9,3,3)</span>
+                                    <span id="label-k" class="text-slate-900">K: --</span>
+                                    <span id="label-d" style="color: #f97316">D: --</span>
+                                    <span id="label-j" style="color: #db2777">J: --</span>
+                                </div>
+                                <div id="kline-chart" class="absolute inset-0 w-full h-full"></div>
+                                <div id="chart-loading"
+                                    class="absolute inset-0 z-20 flex items-center justify-center bg-white/80 hidden">
+                                    <div class="flex flex-col items-center gap-3">
+                                        <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-primary">
+                                        </div>
+                                        <span class="text-xs font-black text-slate-400 uppercase tracking-widest">Data
+                                            Loading...</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 底部元数据 -->
+                        <div
+                            class="px-6 py-3 bg-slate-50 border-t border-slate-100 flex justify-between items-center text-[10px] font-bold">
+                            <div class="text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                                <span class="size-1.5 rounded-full bg-emerald-500"></span>
+                                数据状态：实时已更新
+                            </div>
+                            <div class="text-slate-300 italic">Historical Data Provided by Local Source v1.0</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
-    </main>
 
-    <script>
-        const runBtn = document.getElementById('run-select-btn');
-        const tableBody = document.getElementById('result-table-body');
-        const resultInfo = document.getElementById('result-info');
-        const spinner = document.getElementById('loading-spinner');
-        const logConsole = document.getElementById('log-console');
-        const logLines = document.getElementById('log-lines');
-        const logProgress = document.getElementById('log-progress');
+        <!-- 引入 ECharts -->
+        <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 
-        runBtn.addEventListener('click', async () => {
-            const date = document.getElementById('target-date').value;
-            const strategy = document.getElementById('strategy-selector').value;
+        <script>
+            const runBtn = document.getElementById('run-select-btn');
+            const tableBody = document.getElementById('result-table-body');
+            const resultInfo = document.getElementById('result-info');
+            const spinner = document.getElementById('loading-spinner');
+            const logConsole = document.getElementById('log-console');
+            const logLines = document.getElementById('log-lines');
+            const logProgress = document.getElementById('log-progress');
 
-            let excludes = [];
-            if (document.getElementById('exclude-st').checked) excludes.push('st');
-            if (document.getElementById('exclude-kc').checked) excludes.push('kc');
-            if (document.getElementById('exclude-cy').checked) excludes.push('cy');
-            if (document.getElementById('exclude-bse').checked) excludes.push('bse');
+            let klineChart = null;
 
-            // UI Init
-            runBtn.disabled = true;
-            spinner.classList.remove('hidden');
-            logConsole.classList.remove('hidden');
-            logLines.innerHTML = '';
-            logProgress.textContent = '0%';
-            resultInfo.textContent = '正在启动云端选股引擎...';
-            tableBody.innerHTML = '<tr><td colspan="5" class="px-6 py-20 text-center text-slate-400 font-medium animate-pulse">后台正在计算，结果稍后呈现...</td></tr>';
+            // 初始化图表实例
+            window.addEventListener('resize', () => {
+                if (klineChart) klineChart.resize();
+            });
 
-            const url = `/api/start_select_stocks?date=${date}&strategy=${strategy}&exclude=${excludes.join(',')}`;
-            const eventSource = new EventSource(url);
+            async function selectStock(code, name, price, score) {
+                const chartDom = document.getElementById('kline-chart');
+                const loading = document.getElementById('chart-loading');
 
-            eventSource.onmessage = (event) => {
-                if (event.data === "DONE") {
-                    eventSource.close();
-                    fetchFinalResults();
-                } else {
-                    try {
-                        const msg = JSON.parse(event.data);
-                        addLog(msg.message, msg.level);
+                // 更新 UI 头部信息
+                document.getElementById('view-stock-name').textContent = name;
+                document.getElementById('view-stock-code').textContent = code;
+                document.getElementById('view-stock-price').textContent = `¥${price}`;
+                document.getElementById('view-stock-score').textContent = score;
 
-                        // 提取百分比进度（如果有）
-                        if (msg.message && msg.message.includes('%')) {
-                            const match = msg.message.match(/(\d+)%/);
-                            if (match) logProgress.textContent = match[0];
-                        }
-                    } catch (e) { }
+                // 切换列表选中状态
+                document.querySelectorAll('#result-table-body tr').forEach(tr => {
+                    if (tr.dataset.code === code) {
+                        tr.classList.add('bg-primary/5', 'ring-1', 'ring-inset', 'ring-primary/20');
+                    } else {
+                        tr.classList.remove('bg-primary/5', 'ring-1', 'ring-inset', 'ring-primary/20');
+                    }
+                });
+
+                if (!klineChart) {
+                    klineChart = echarts.init(chartDom);
                 }
-            };
+                klineChart.clear(); // 确保清理旧状态
+                loading.classList.remove('hidden');
 
-            eventSource.onerror = (e) => {
-                eventSource.close();
-                console.error("SSE Error:", e);
-                addLog("连接数据引擎失败，请重试", "ERROR");
-                runBtn.disabled = false;
-                spinner.classList.add('hidden');
-            };
-        });
-
-        function addLog(text, level) {
-            const line = document.createElement('div');
-            const colorMap = {
-                'INFO': 'text-slate-300',
-                'DEBUG': 'text-slate-500',
-                'WARN': 'text-amber-400',
-                'ERROR': 'text-red-400'
-            };
-            line.className = colorMap[level] || 'text-slate-300';
-            line.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
-            logLines.appendChild(line);
-            logLines.scrollTop = logLines.scrollHeight;
-
-            // 同时更新主提示语
-            if (level === 'INFO') resultInfo.textContent = text;
-        }
-
-        async function fetchFinalResults() {
-            try {
-                const response = await fetch('/api/select_stocks');
-                const data = await response.json();
-
-                if (data.data && data.data.length > 0) {
-                    renderTable(data.data);
-                    resultInfo.textContent = `选股完成！在 ${data.date} 共有 ${data.count} 只个股符合信号`;
-                } else {
-                    tableBody.innerHTML = '<tr><td colspan="5" class="px-6 py-20 text-center text-amber-400 font-medium">未找到符合条件的个股</td></tr>';
-                    resultInfo.textContent = '任务已完成，未找到符合条件的个股。';
+                try {
+                    const res = await fetch(`/api/stock_kline/${code}`);
+                    const result = await res.json();
+                    if (result.data) {
+                        renderKlineChart(result.data);
+                    }
+                } catch (err) {
+                    console.error(err);
+                } finally {
+                    loading.classList.add('hidden');
                 }
-            } catch (error) {
-                console.error(error);
-                tableBody.innerHTML = '<tr><td colspan="5" class="px-6 py-20 text-center text-red-500 font-medium">结果拉取失败</td></tr>';
-            } finally {
-                runBtn.disabled = false;
-                spinner.classList.add('hidden');
-                // 3秒后隐藏日志区
-                setTimeout(() => {
-                    logConsole.classList.add('hidden');
-                }, 3000);
             }
-        }
 
-        function renderTable(stocks) {
-            tableBody.innerHTML = '';
-            stocks.forEach(s => {
-                const tr = document.createElement('tr');
-                tr.className = 'hover:bg-slate-50 transition-colors group';
-                tr.innerHTML = `
-                    <td class="px-6 py-4 text-sm font-mono font-bold text-slate-600">${s.code}</td>
-                    <td class="px-6 py-4 text-sm font-bold text-slate-900">${s.name}</td>
-                    <td class="px-6 py-4 text-sm font-mono text-slate-700">¥${s.close}</td>
-                    <td class="px-6 py-4 text-sm font-mono font-black text-right text-primary">${s.score}</td>
-                    <td class="px-6 py-4 text-center">
-                        <span class="px-2 py-1 rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase">买入信号</span>
+            function renderKlineChart(rawData) {
+                // rawData: [date, open, close, low, high, volume, k, d, j, ma5, ma60]
+                const dates = rawData.map(item => item[0]);
+                const values = rawData.map(item => [item[1], item[2], item[3], item[4]]);
+                const volumes = rawData.map(item => item[5]);
+                const k = rawData.map(item => item[6]);
+                const d = rawData.map(item => item[7]);
+                const j = rawData.map(item => item[8]);
+                const ma5 = rawData.map(item => item[9]);
+                const ma60 = rawData.map(item => item[10]);
+
+                const option = {
+                    backgroundColor: '#ffffff',
+                    legend: {
+                        data: ['K线', 'MA5', 'MA60', 'K', 'D', 'J'],
+                        top: 10,
+                        right: 40,
+                        textStyle: { fontSize: 10, fontWeight: 'bold', color: '#64748b' }
+                    },
+                    tooltip: {
+                        trigger: 'axis',
+                        axisPointer: { type: 'cross' },
+                        showContent: true, // 总开关开启，内部可根据 formatter 判断
+                        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                        borderWidth: 1,
+                        borderColor: '#e2e8f0',
+                        padding: 12,
+                        textStyle: { color: '#1e293b', fontSize: 12 },
+                        extraCssText: 'shadow-xl',
+                        formatter: (params) => {
+                            const kline = params.find(p => p.seriesName === 'K线');
+                            const vol = params.find(p => p.seriesName === '成交量');
+                            const m5 = params.find(p => p.seriesName === 'MA5');
+                            const m60 = params.find(p => p.seriesName === 'MA60');
+                            if (!kline) return null;
+
+                            const date = kline.axisValue;
+                            const [open, close, low, high] = kline.data.slice(1);
+                            const isUp = close >= open;
+                            const color = isUp ? '#ef4444' : '#22c55e';
+                            const volVal = vol ? vol.data : '--';
+
+                            let html = `
+                                <div class="flex flex-col gap-1 min-w-[120px]">
+                                    <div class="font-black text-slate-900 border-b border-slate-100 pb-1 mb-1">${date}</div>
+                                    <div class="flex justify-between gap-4"><span>开盘</span><span class="font-mono font-bold">${open}</span></div>
+                                    <div class="flex justify-between gap-4 text-slate-900 font-bold"><span>收盘</span><span style="color: ${color}">${close}</span></div>
+                                    <div class="flex justify-between gap-4 text-xs"><span>最高</span><span class="font-mono">${high}</span></div>
+                                    <div class="flex justify-between gap-4 text-xs"><span>最低</span><span class="font-mono">${low}</span></div>
+                                    <div class="flex justify-between gap-4 border-t border-slate-50 pt-1 mt-1"><span>成交</span><span class="font-mono">${volVal}</span></div>
+                            `;
+
+                            if (m5) html += `<div class="flex justify-between gap-4 text-xs"><span style="color:#eab308">MA5</span><span class="font-mono">${m5.data}</span></div>`;
+                            if (m60) html += `<div class="flex justify-between gap-4 text-xs"><span style="color:#2563eb">MA60</span><span class="font-mono">${m60.data}</span></div>`;
+
+                            html += `</div>`;
+                            return html;
+                        }
+                    },
+                    axisPointer: {
+                        link: [{ xAxisIndex: 'all' }],
+                        label: { backgroundColor: '#135bec' }
+                    },
+                    grid: [
+                        { left: '60', right: '30', height: '45%', top: '10%' },
+                        { left: '60', right: '30', top: '65%', height: '12%' },
+                        { left: '60', right: '30', top: '82%', height: '12%' }
+                    ],
+                    xAxis: [
+                        {
+                            type: 'category',
+                            data: dates,
+                            boundaryGap: false,
+                            axisLine: { lineStyle: { color: '#e2e8f0' } },
+                            axisLabel: { show: false },
+                            splitLine: { show: true, lineStyle: { color: '#f8fafc' } }
+                        },
+                        {
+                            type: 'category',
+                            gridIndex: 1,
+                            data: dates,
+                            boundaryGap: false,
+                            axisLine: { lineStyle: { color: '#e2e8f0' } },
+                            axisLabel: { show: false }
+                        },
+                        {
+                            type: 'category',
+                            gridIndex: 2,
+                            data: dates,
+                            boundaryGap: false,
+                            axisLine: { lineStyle: { color: '#e2e8f0' } },
+                            axisLabel: { color: '#94a3b8', fontSize: 10 },
+                            splitLine: { show: false }
+                        }
+                    ],
+                    yAxis: [
+                        {
+                            scale: true,
+                            axisLine: { lineStyle: { color: '#e2e8f0' } },
+                            axisLabel: { color: '#94a3b8', fontSize: 10 },
+                            splitLine: { lineStyle: { color: '#f1f5f9' } }
+                        },
+                        {
+                            scale: true,
+                            gridIndex: 1,
+                            splitNumber: 2,
+                            axisLabel: { show: false },
+                            axisLine: { show: false },
+                            axisTick: { show: false },
+                            splitLine: { show: false }
+                        },
+                        {
+                            scale: true,
+                            gridIndex: 2,
+                            axisLabel: { color: '#94a3b8', fontSize: 10 },
+                            axisLine: { lineStyle: { color: '#e2e8f0' } },
+                            splitLine: { lineStyle: { color: '#f1f5f9' } }
+                        }
+                    ],
+                    dataZoom: [
+                        { type: 'inside', xAxisIndex: [0, 1, 2], startValue: dates.length > 45 ? dates.length - 45 : 0, endValue: dates.length - 1 },
+                        { show: true, xAxisIndex: [0, 1, 2], type: 'slider', bottom: '0%', height: 20, startValue: dates.length > 45 ? dates.length - 45 : 0, endValue: dates.length - 1 }
+                    ],
+                    series: [
+                        {
+                            name: 'K线',
+                            type: 'candlestick',
+                            data: values,
+                            itemStyle: {
+                                color: '#ef4444',
+                                color0: '#22c55e',
+                                borderColor: '#ef4444',
+                                borderColor0: '#22c55e'
+                            }
+                        },
+                        {
+                            name: 'MA5',
+                            type: 'line',
+                            data: ma5,
+                            smooth: true,
+                            showSymbol: false,
+                            lineStyle: { width: 1.5, color: '#eab308' } // 黄色
+                        },
+                        {
+                            name: 'MA60',
+                            type: 'line',
+                            data: ma60,
+                            smooth: true,
+                            showSymbol: false,
+                            lineStyle: { width: 1.5, color: '#2563eb' } // 蓝色
+                        },
+                        {
+                            name: '成交量',
+                            type: 'bar',
+                            xAxisIndex: 1,
+                            yAxisIndex: 1,
+                            data: volumes,
+                            itemStyle: {
+                                color: (params) => {
+                                    return rawData[params.dataIndex][1] > rawData[params.dataIndex][2] ? '#22c55e' : '#ef4444';
+                                }
+                            }
+                        },
+                        {
+                            name: 'K',
+                            type: 'line',
+                            xAxisIndex: 2,
+                            yAxisIndex: 2,
+                            data: k,
+                            showSymbol: false,
+                            smooth: true,
+                            lineStyle: { width: 1.2, color: '#0f172a' } // Slate-900 (Black)
+                        },
+                        {
+                            name: 'D',
+                            type: 'line',
+                            xAxisIndex: 2,
+                            yAxisIndex: 2,
+                            data: d,
+                            showSymbol: false,
+                            smooth: true,
+                            lineStyle: { width: 1.2, color: '#f97316' } // Orange-500
+                        },
+                        {
+                            name: 'J',
+                            type: 'line',
+                            xAxisIndex: 2,
+                            yAxisIndex: 2,
+                            data: j,
+                            showSymbol: false,
+                            smooth: true,
+                            lineStyle: { width: 1.2, color: '#db2777' } // Pink-600
+                        }
+                    ]
+                };
+                klineChart.setOption(option);
+
+                // 初始化时显示最新的 KDJ 值
+                if (rawData.length > 0) {
+                    const latest = rawData[rawData.length - 1];
+                    updateKDJLabels(latest[6], latest[7], latest[8]);
+                    updateMALabels(latest[9], latest[10]);
+                }
+
+                // 悬浮联动更新指标值
+                klineChart.on('updateAxisPointer', (event) => {
+                    if (event.axesInfo && event.axesInfo.length > 0) {
+                        const dataIndex = event.dataIndex;
+                        if (dataIndex != null && rawData[dataIndex]) {
+                            const point = rawData[dataIndex];
+                            updateKDJLabels(point[6], point[7], point[8]);
+                            updateMALabels(point[9], point[10]);
+                        }
+                    }
+                });
+
+                function updateKDJLabels(k_val, d_val, j_val) {
+                    const lk = document.getElementById('label-k');
+                    const ld = document.getElementById('label-d');
+                    const lj = document.getElementById('label-j');
+                    if (lk) lk.textContent = `K: ${parseFloat(k_val).toFixed(2)}`;
+                    if (ld) ld.textContent = `D: ${parseFloat(d_val).toFixed(2)}`;
+                    if (lj) lj.textContent = `J: ${parseFloat(j_val).toFixed(2)}`;
+                }
+
+                function updateMALabels(m5, m60) {
+                    const lm5 = document.getElementById('label-ma5');
+                    const lm60 = document.getElementById('label-ma60');
+                    const v5 = parseFloat(m5);
+                    const v60 = parseFloat(m60);
+                    if (lm5) lm5.textContent = `MA5: ${isNaN(v5) ? '0.00' : v5.toFixed(2)}`;
+                    if (lm60) lm60.textContent = `MA60: ${isNaN(v60) ? '0.00' : v60.toFixed(2)}`;
+                }
+            }
+
+            runBtn.addEventListener('click', async () => {
+                const date = document.getElementById('target-date').value;
+                const strategy = document.getElementById('strategy-selector').value;
+
+                let excludes = [];
+                if (document.getElementById('exclude-st').checked) excludes.push('st');
+                if (document.getElementById('exclude-kc').checked) excludes.push('kc');
+                if (document.getElementById('exclude-cy').checked) excludes.push('cy');
+                if (document.getElementById('exclude-bse').checked) excludes.push('bse');
+
+                // UI Init
+                runBtn.disabled = true;
+                spinner.classList.remove('hidden');
+                logConsole.classList.remove('hidden');
+                logLines.innerHTML = '';
+                logProgress.textContent = '0%';
+                resultInfo.textContent = '正在启动云端选股引擎...';
+                tableBody.innerHTML = '<tr><td colspan="5" class="px-6 py-20 text-center text-slate-400 font-medium animate-pulse">后台正在计算，结果稍后呈现...</td></tr>';
+
+                const url = `/api/start_select_stocks?date=${date}&strategy=${strategy}&exclude=${excludes.join(',')}`;
+                const eventSource = new EventSource(url);
+
+                eventSource.onmessage = (event) => {
+                    if (event.data === "DONE") {
+                        eventSource.close();
+                        fetchFinalResults();
+                    } else {
+                        try {
+                            const msg = JSON.parse(event.data);
+                            addLog(msg.message, msg.level);
+
+                            // 提取百分比进度（如果有）
+                            if (msg.message && msg.message.includes('%')) {
+                                const match = msg.message.match(/(\d+)%/);
+                                if (match) logProgress.textContent = match[0];
+                            }
+                        } catch (e) { }
+                    }
+                };
+
+                eventSource.onerror = (e) => {
+                    eventSource.close();
+                    console.error("SSE Error:", e);
+                    addLog("连接数据引擎失败，请重试", "ERROR");
+                    runBtn.disabled = false;
+                    spinner.classList.add('hidden');
+                };
+            });
+
+            function addLog(text, level) {
+                const line = document.createElement('div');
+                const colorMap = {
+                    'INFO': 'text-slate-300',
+                    'DEBUG': 'text-slate-500',
+                    'WARN': 'text-amber-400',
+                    'ERROR': 'text-red-400'
+                };
+                line.className = colorMap[level] || 'text-slate-300';
+                line.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+                logLines.appendChild(line);
+                logLines.scrollTop = logLines.scrollHeight;
+
+                // 同时更新主提示语
+                if (level === 'INFO') resultInfo.textContent = text;
+            }
+
+            async function fetchFinalResults() {
+                try {
+                    const response = await fetch('/api/select_stocks');
+                    const data = await response.json();
+
+                    if (data.data && data.data.length > 0) {
+                        renderTable(data.data);
+                        resultInfo.textContent = `选股完成！在 ${data.date} 共有 ${data.count} 只个股符合信号`;
+                    } else {
+                        tableBody.innerHTML = '<tr><td colspan="5" class="px-6 py-20 text-center text-amber-400 font-medium">未找到符合条件的个股</td></tr>';
+                        resultInfo.textContent = '任务已完成，未找到符合条件的个股。';
+                    }
+                } catch (error) {
+                    console.error(error);
+                    tableBody.innerHTML = '<tr><td colspan="5" class="px-6 py-20 text-center text-red-500 font-medium">结果拉取失败</td></tr>';
+                } finally {
+                    runBtn.disabled = false;
+                    spinner.classList.add('hidden');
+                    // 3秒后隐藏日志区
+                    setTimeout(() => {
+                        logConsole.classList.add('hidden');
+                    }, 3000);
+                }
+            }
+
+            function renderTable(stocks) {
+                tableBody.innerHTML = '';
+                document.getElementById('stock-count-badge').textContent = `${stocks.length} 只`;
+                stocks.forEach((s, idx) => {
+                    const tr = document.createElement('tr');
+                    tr.dataset.code = s.code;
+                    tr.className = 'hover:bg-slate-50 transition-all group cursor-pointer border-l-4 border-transparent hover:border-primary/30';
+
+                    // 绑定移入自动切换
+                    tr.onmouseenter = () => selectStock(s.code, s.name, s.close, s.score);
+
+                    tr.innerHTML = `
+                    <td class="px-4 py-4">
+                        <div class="flex flex-col">
+                            <span class="text-sm font-black text-slate-900 group-hover:text-primary transition-colors">${s.name}</span>
+                            <span class="text-[10px] font-mono font-bold text-slate-400 mt-0.5">${s.code}</span>
+                        </div>
+                    </td>
+                    <td class="px-4 py-4 text-right">
+                        <div class="flex flex-col items-end">
+                            <span class="text-sm font-mono font-bold text-slate-700">¥${s.close}</span>
+                            <span class="text-[10px] font-black text-primary italic mt-0.5">得分: ${s.score}</span>
+                        </div>
+                    </td>
+                    <td class="px-4 py-4 text-right w-10">
+                        <span class="material-symbols-outlined text-slate-200 group-hover:text-primary transition-all !text-lg">chevron_right</span>
                     </td>
                 `;
-                tableBody.appendChild(tr);
-            });
-        }
+                    tableBody.appendChild(tr);
 
-        // 设置默认日期为昨天（简单处理）
-        window.addEventListener('DOMContentLoaded', () => {
-            const d = new Date();
-            d.setDate(d.getDate() - 1);
-            document.getElementById('target-date').value = d.toISOString().split('T')[0];
-        });
-    </script>
+                    // 默认选中第一只
+                    if (idx === 0) selectStock(s.code, s.name, s.close, s.score);
+                });
+            }
+
+            // 设置默认日期为昨天
+            window.addEventListener('DOMContentLoaded', () => {
+                const d = new Date();
+                d.setDate(d.getDate() - 1);
+                document.getElementById('target-date').value = d.toISOString().split('T')[0];
+
+                resultInfo.textContent = "系统就绪，请选择日期和策略后点击“开始选股”";
+            });
+        </script>
 </body>
 
 </html>

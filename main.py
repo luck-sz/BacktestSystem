@@ -21,6 +21,7 @@ import os
 import uuid
 
 from typing import Any, Callable, Coroutine
+import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
@@ -36,6 +37,7 @@ os.makedirs(HISTORY_DIR, exist_ok=True)
 # ── 全局状态 ──────────────────────────────────────────────
 _is_running   = False   # 防止并发重复提交
 _last_selection_results = {}
+_last_result = {"trades": [], "stats": {}}
 
 
 # ── 历史记录工具函数 ──────────────────────────────────────
@@ -298,7 +300,7 @@ async def start_backtest(request: Request):
 @app.get("/api/select_stocks")
 async def api_select_stocks(request: Request):
     """获取最后一次选股结果 API。"""
-    return JSONResponse(_last_selection_results)
+    return JSONResponse(content=_last_selection_results)
 
 
 @app.get("/api/start_select_stocks")
@@ -361,6 +363,66 @@ async def api_start_select_stocks(request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/api/stock_kline/{stock_code}")
+async def api_stock_kline(stock_code: str):
+    """获取指定股票的 K 线数据。"""
+    data_dir = os.path.join(BASE_DIR, "all_stock_data")
+    target_file = None
+    
+    # 查找文件
+    for root, _, files in os.walk(data_dir):
+        if f"{stock_code}.csv" in files:
+            target_file = os.path.join(root, f"{stock_code}.csv")
+            break
+            
+    if not target_file:
+        raise HTTPException(status_code=404, detail=f"未找到股票 {stock_code} 的数据文件")
+        
+    try:
+        from backtest import RENAME_MAP
+        
+        # 读取最近 200 天的数据用于展示
+        df = pd.read_csv(target_file, usecols=lambda c: c in RENAME_MAP)
+        df.rename(columns=RENAME_MAP, inplace=True)
+        df["date"] = pd.to_datetime(df["date"].astype(str), format="%Y%m%d", errors="coerce").dt.strftime('%Y-%m-%d')
+        df.dropna(subset=["date"], inplace=True)
+        df.sort_values("date", inplace=True)
+        
+        # 1. 首先计算全量数据的指标，确保“预热”充足
+        low_9 = df["low"].rolling(window=9).min()
+        high_9 = df["high"].rolling(window=9).max()
+        rsv = (df["close"] - low_9) / (high_9 - low_9).replace(0, 1e-9) * 100
+        
+        # KDJ 标准计算
+        df["k"] = rsv.ewm(com=2, adjust=False).mean()
+        df["d"] = df["k"].ewm(com=2, adjust=False).mean()
+        df["j"] = 3 * df["k"] - 2 * df["d"]
+        
+        # 均线计算
+        df["ma5"] = df["close"].rolling(window=5).mean()
+        df["ma60"] = df["close"].rolling(window=60).mean()
+        
+        # 2. 截取最近的 300 条
+        df = df.tail(300)
+        
+        # 3. 填充计算初期产生的空值
+        df = df.fillna(0)
+        
+        # 转换为列表 [date, open, close, low, high, volume, k, d, j, ma5, ma60]
+        chart_data = df[["date", "open", "close", "low", "high", "volume", "k", "d", "j", "ma5", "ma60"]].values.tolist()
+        
+        if df.empty:
+            return {"code": stock_code, "name": stock_code, "data": []}
+
+        return {
+            "code": stock_code,
+            "name": str(df["name"].iloc[0]) if "name" in df.columns else stock_code,
+            "data": chart_data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"解析数据失败: {str(e)}")
 
 
 # ── 本地启动 ──────────────────────────────────────────────
