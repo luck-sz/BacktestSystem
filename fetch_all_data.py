@@ -15,6 +15,20 @@ def fetch_single_stock(symbol, start_str, end_str, save_dir):
     try:
         df = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start_str, end_date=end_str, adjust="qfq")
         if not df.empty:
+            # 统一字段列名和增加计算字段
+            df['昨收盘价'] = df['收盘'] - df['涨跌额']
+            
+            mapping = {
+                '日期': '交易日期', '开盘': '开盘价', '最高': '最高价', '最低': '最低价',
+                '收盘': '收盘价', '成交量': '成交量(手)', '涨跌额': '涨跌额'
+            }
+            df.rename(columns=mapping, inplace=True)
+            
+            # 统一列顺序
+            cols = ['交易日期', '开盘价', '最高价', '最低价', '收盘价', '成交量(手)', '昨收盘价', '涨跌额']
+            # 注意：此脚本下载时不含“名称”，如果需要可以后续通过名称列表补齐，但为了基础回测够用了
+            df = df[[c for c in cols if c in df.columns]]
+            
             df.to_csv(file_path, index=False, encoding='utf-8-sig')
         return symbol, True
     except Exception as e:

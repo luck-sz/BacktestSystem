@@ -113,9 +113,9 @@
                     <div class="relative">
                         <select id="strategy-selector"
                             class="w-full h-10 rounded-lg border border-slate-300 bg-white text-sm font-medium focus:ring-2 focus:ring-primary focus:border-transparent appearance-none px-3">
-                            <option value="brick">砖型图打分策略</option>
-                            <option value="rsv">RSV背离轮动</option>
-                            <option value="small_bank">小市值轮动</option>
+                            <option value="brick">超跌反弹</option>
+                            <option value="rsv">RSV超卖</option>
+                            <option value="small_bank">小市值</option>
                         </select>
                         <div
                             class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 flex items-center">
@@ -699,6 +699,8 @@
                     // 绑定移入自动切换
                     tr.onmouseenter = () => selectStock(s.code, s.name, s.close, s.score);
 
+                    const colorClass = s.pct_chg >= 0 ? 'text-red-600' : 'text-emerald-600';
+                    const sign = s.pct_chg > 0 ? '+' : '';
                     tr.innerHTML = `
                     <td class="px-4 py-4">
                         <div class="flex flex-col">
@@ -709,8 +711,11 @@
                     <td class="px-4 py-4 text-right">
                         <div class="flex flex-col items-end">
                             <span class="text-sm font-mono font-bold text-slate-700">¥${s.close}</span>
-                            <span class="text-[10px] font-black text-primary italic mt-0.5">得分: ${s.score}</span>
+                            <span class="text-[10px] font-bold ${colorClass} mt-0.5">${sign}${s.pct_chg}%</span>
                         </div>
+                    </td>
+                    <td class="px-2 py-4 text-right">
+                         <span class="text-[10px] font-black text-primary/60 italic">得分: ${s.score}</span>
                     </td>
                     <td class="px-4 py-4 text-right w-10">
                         <span class="material-symbols-outlined text-slate-200 group-hover:text-primary transition-all !text-lg">chevron_right</span>

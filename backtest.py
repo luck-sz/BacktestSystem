@@ -25,12 +25,13 @@ RENAME_MAP = {
     "最低价": "low",
     "收盘价": "close",
     "成交量(手)": "volume",
+    "涨跌幅(%)": "pct_chg",
 }
 
 STRATEGY_NAMES = {
-    "rsv":   "RSV背离+缩量轮动策略",
-    "brick": "砖型图打分策略",
-    "small_bank": "小市值+银行轮动(实盘优化版)",
+    "rsv":   "RSV超卖",
+    "brick": "超跌反弹",
+    "small_bank": "小市值",
 }
 
 MIN_ROWS = 25  # 数据行数过少则跳过
@@ -742,6 +743,7 @@ async def select_stocks_async(
             "code": code,
             "name": stock_names.get(code, code),
             "close": round(float(row.get("close", 0)), 2),
+            "pct_chg": round(float(row.get("pct_chg", 0)), 2),
             "score": round(float(row.get("brick_score", 0)) if strategy == "brick" else 0, 2),
             "signal": "买入"
         })

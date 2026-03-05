@@ -109,9 +109,9 @@
                     <div class="relative">
                         <select id="strategy-selector"
                             class="w-full rounded-lg border border-slate-300 bg-white text-text-main text-sm h-10 pl-3 pr-10 focus:ring-2 focus:ring-primary focus:border-transparent appearance-none shadow-sm bg-none font-medium">
-                            <option value="rsv">RSV背离+缩量轮动策略</option>
-                            <option value="brick">砖型图打分策略</option>
-                            <option value="small_bank">小市值+银行轮动(实盘优化版)</option>
+                            <option value="rsv">RSV超卖</option>
+                            <option value="brick">超跌反弹</option>
+                            <option value="small_bank">小市值</option>
                         </select>
                         <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
                             <span class="material-symbols-outlined text-sm">expand_more</span>
@@ -449,19 +449,19 @@
                             paramsRSV.style.display = 'none';
                             paramsBrick.style.display = 'flex';
                             paramsSmallBank.style.display = 'none';
-                            titleText.textContent = '砖型图打分策略';
+                            titleText.textContent = '超跌反弹';
                             descText.textContent = 'KDJ深水超卖+突破MA60趋势的多因子共振短线策略';
                         } else if (this.value === 'small_bank') {
                             paramsRSV.style.display = 'none';
                             paramsBrick.style.display = 'none';
                             paramsSmallBank.style.display = 'flex';
-                            titleText.textContent = '小市值+银行轮动';
+                            titleText.textContent = '小市值';
                             descText.textContent = '避开财报季暴雷配置三大行，其余时间做量价优选小市值';
                         } else {
                             paramsRSV.style.display = 'flex';
                             paramsBrick.style.display = 'none';
                             paramsSmallBank.style.display = 'none';
-                            titleText.textContent = 'RSV背离轮动';
+                            titleText.textContent = 'RSV超卖';
                             descText.textContent = '捕捉底背离及缩量的超跌反弹短线策略';
                         }
                     });
