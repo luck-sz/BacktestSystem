@@ -26,6 +26,7 @@ RENAME_MAP = {
     "收盘价": "close",
     "成交量(手)": "volume",
     "涨跌幅(%)": "pct_chg",
+    "前收盘价": "prev_close",
 }
 
 STRATEGY_NAMES = {
@@ -739,11 +740,21 @@ async def select_stocks_async(
         if target_ts not in df.index:
             continue
         row = df.loc[target_ts]
+        # 获取涨跌幅（优先取 pct_chg 列，若无则尝试动态计算）
+        pct_val = row.get("pct_chg")
+        if pd.isna(pct_val) or pct_val == 0 or pct_val == '':
+            close_p = float(row.get("close", 0))
+            prev_p = float(row.get("prev_close", 0))
+            if prev_p > 0:
+                pct_val = (close_p / prev_p - 1) * 100
+            else:
+                pct_val = 0
+        
         final_results.append({
             "code": code,
             "name": stock_names.get(code, code),
             "close": round(float(row.get("close", 0)), 2),
-            "pct_chg": round(float(row.get("pct_chg", 0)), 2),
+            "pct_chg": round(float(pct_val), 2),
             "score": round(float(row.get("brick_score", 0)) if strategy == "brick" else 0, 2),
             "signal": "买入"
         })
