@@ -27,6 +27,8 @@ RENAME_MAP = {
     "成交量(手)": "volume",
     "涨跌幅(%)": "pct_chg",
     "前收盘价": "prev_close",
+    "所属行业": "industry",
+    "地域": "region",
 }
 
 STRATEGY_NAMES = {
@@ -39,7 +41,7 @@ MIN_ROWS = 25  # 数据行数过少则跳过
 
 # ─────────────────────── 指标计算 ───────────────────────
 
-def _calc_rsv(df: pd.DataFrame) -> pd.DataFrame:
+def _calc_rsv(df: pd.DataFrame, exclude_boards: list[str] = None) -> pd.DataFrame:
     """RSV背离策略指标"""
     low21   = df["low"].rolling(21, min_periods=1).min()
     high21  = df["close"].rolling(21, min_periods=1).max()
@@ -53,9 +55,36 @@ def _calc_rsv(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _calc_brick(df: pd.DataFrame) -> pd.DataFrame:
+def _calc_brick(df: pd.DataFrame, exclude_boards: list[str] = None) -> pd.DataFrame:
     """砖型图打分策略指标（通达信风格近似）"""
-    df["ma60"] = df["close"].rolling(60).mean()
+    exclude_boards = exclude_boards or []
+    ma_short = 5
+    ma_long = 60
+    below_days = 5
+    callback_depth = 1.0
+    kdj_limit = 0.0
+    
+    for item in exclude_boards:
+        if item.startswith("brick_ma_short:"):
+            try: ma_short = int(item.split(":")[1])
+            except: pass
+        elif item.startswith("brick_ma_long:"):
+            try: ma_long = int(item.split(":")[1])
+            except: pass
+        elif item.startswith("brick_below_days:"):
+            try: below_days = int(item.split(":")[1])
+            except: pass
+        elif item.startswith("brick_callback:"):
+            try: callback_depth = float(item.split(":")[1])
+            except: pass
+        elif item.startswith("brick_kdj_limit:"):
+            try: kdj_limit = float(item.split(":")[1])
+            except: pass
+            
+    callback_mult = 1.0 - callback_depth / 100.0
+
+    df["ma5"] = df["close"].rolling(ma_short).mean()
+    df["ma60"] = df["close"].rolling(ma_long).mean()
 
     low9  = df["low"].rolling(9).min()
     high9 = df["high"].rolling(9).max()
@@ -82,20 +111,25 @@ def _calc_brick(df: pd.DataFrame) -> pd.DataFrame:
     b1 = df["brick"].shift(1)
     b2 = df["brick"].shift(2)
 
-    # color_ok: 要求指标出现 V 型反向，且回调深度超过 3%（避免 000913 这种微小抖动）
-    color_ok    = (b1 < b2) & (b0 > b1) & (b1 < b2 * 0.97)
+    # color_ok: 要求指标出现 V 型反向，且回调深度超过 x%
+    color_ok    = (b1 < b2) & (b0 > b1) & (b1 < b2 * callback_mult)
     trend_ok    = df["close"] > df["ma60"]
-    oversold_ok = df["j"].shift(1).rolling(5).min() < 0
+    oversold_ok = df["j"].shift(1).rolling(5).min() < kdj_limit
     red_len     = b0 - b1
     green_len   = b2 - b1
     length_ok   = red_len > green_len
+    
+    # 排除今天，最近 N 日的收盘价都比短期均线低
+    is_below_ma5 = df["close"] < df["ma5"]
+    below_ma5_5days = is_below_ma5.shift(1).rolling(below_days).sum() == below_days
 
     df["brick_score"] = red_len / (green_len + 0.001)
-    df["buy_signal"]  = color_ok & trend_ok & oversold_ok & length_ok
+    df["buy_signal"]  = color_ok & trend_ok & oversold_ok & length_ok & below_ma5_5days
     return df
 
 
-def _calc_small_bank(df: pd.DataFrame) -> pd.DataFrame:
+
+def _calc_small_bank(df: pd.DataFrame, exclude_boards: list[str] = None) -> pd.DataFrame:
     """小市值+银行轮动混合策略指标"""
     df["turnover"] = df["close"] * df["volume"]
     df["avg_turnover20"] = df["turnover"].rolling(20, min_periods=1).mean()
@@ -169,7 +203,7 @@ def _load_single_file(args: tuple) -> tuple[str, str, pd.DataFrame | None]:
         # 修复指标需要的 days_listed (保留其在全量数据中的近似绝对序号)
         df["days_listed"] = total_trading_days - len(df) + np.arange(len(df))
 
-        df = calc_fn(df)
+        df = calc_fn(df, exclude_boards)
 
         # 必须在计算指标之后再做精确的日期截取，保证滚动窗口完整且最终输出期间精准
         df = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
@@ -414,16 +448,13 @@ async def run_backtest_async(
                         sell_reason = "持仓满5天无条件清仓(时间止损)"
             elif strategy == "brick":
                 if hold_days >= 1:
-                    open_p = float(df.loc[current_date, "open"])
-                    open_profit = (open_p - info["buy_price"]) / info["buy_price"] * 100
-                    if open_profit > 1.0:
-                        sell_price = open_p
-                        profit_pct = open_profit
-                        sell_reason = "次日早盘开盘盈利超1%止盈"
-                    else:
-                        sell_reason = "次日尾盘14:55无条件清仓"
-                elif hold_days >= 5:
-                    sell_reason = "持仓满5天强制清仓(风控)"
+                    close_p = float(df.loc[current_date, "close"])
+                    ma_short = float(df.loc[current_date, "ma5"]) if "ma5" in df.columns else 0.0
+                    
+                    if ma_short > 0 and close_p < ma_short:
+                        sell_price = close_p
+                        profit_pct = (sell_price - info["buy_price"]) / info["buy_price"] * 100
+                        sell_reason = "尾盘跌破短期均线(5日线)卖出"
             else:
                 sell_reason = _judge_sell(strategy, hold_days, profit_pct)
                 if not sell_reason and hold_days >= 5:
@@ -654,8 +685,11 @@ def _select_candidates(
         # RSV 策略：取成交量放大倍数最小的（缩量）
         candidates.sort(key=lambda x: x["score"])
         return [c["stock"] for c in candidates[:available_slots]]
+    elif strategy == "brick":
+        # Brick：暂无特定排序或随机取，可以按 score 从高到低
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        return [c["stock"] for c in candidates[:available_slots]]
     else:
-        # Brick：按得分从高到低排序
         candidates.sort(key=lambda x: x["score"], reverse=True)
         return [c["stock"] for c in candidates[:available_slots]]
 
@@ -756,7 +790,9 @@ async def select_stocks_async(
             "close": round(float(row.get("close", 0)), 2),
             "pct_chg": round(float(pct_val), 2),
             "score": round(float(row.get("brick_score", 0)) if strategy == "brick" else 0, 2),
-            "signal": "买入"
+            "signal": "买入",
+            "industry": str(row.get("industry", "")),
+            "region": str(row.get("region", ""))
         })
 
     await log("INFO", f"选股任务结束，共筛选出 {len(final_results)} 只符合条件的个股。")

@@ -19,6 +19,7 @@ import datetime
 import json
 import os
 import uuid
+import sys
 
 from typing import Any, Callable, Coroutine
 import pandas as pd
@@ -423,6 +424,125 @@ async def api_stock_kline(stock_code: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"解析数据失败: {str(e)}")
+
+
+# ── API 自动更新与检查 ──────────────────────────────────────
+
+@app.get("/api/check_and_update")
+async def api_check_and_update():
+    """检查股票数据是否为最新，如果不是则运行 append_tencent.py 并推送进度"""
+    from datetime import datetime
+    import re
+    
+    now = datetime.now()
+    target_date = now.strftime("%Y%m%d")
+    data_dir = os.path.join(BASE_DIR, "all_stock_data")
+    needs_update = False
+    
+    # 检查是否为工作日的 8:30 到 15:10 之间
+    is_trading_hours = False
+    if now.weekday() < 5:  # 0-4 分别是周一到周五
+        if (now.hour == 8 and now.minute >= 30) or (9 <= now.hour <= 14) or (now.hour == 15 and now.minute <= 10):
+            is_trading_hours = True
+    
+    lock_file = os.path.join(data_dir, ".update_lock")
+    last_check_date = ""
+    if os.path.exists(lock_file):
+        try:
+            with open(lock_file, "r") as f:
+                last_check_date = f.read().strip()
+        except:
+            pass
+
+    # 如果今天已经完整的跑过一次更新，或者正处于工作日盘中交易时段，则不触发自动刷新机制
+    if last_check_date == target_date or is_trading_hours:
+        needs_update = False
+    else:
+        sample_file = None
+        if os.path.exists(data_dir):
+            # 查找任意一个 csv 文件（可能在子目录下）
+            for root, dirs, files in os.walk(data_dir):
+                for f in files:
+                    if f.endswith('.csv'):
+                        sample_file = os.path.join(root, f)
+                        break
+                if sample_file:
+                    break
+                    
+        if sample_file:
+            try:
+                df = pd.read_csv(sample_file, nrows=1, dtype=str)
+                if not df.empty and '交易日期' in df.columns:
+                    last_date = str(df['交易日期'].iloc[0]).strip()
+                    if last_date < target_date:
+                        needs_update = True
+            except:
+                needs_update = True
+        else:
+            needs_update = True
+
+    async def event_generator():
+        if not needs_update:
+            yield f"data: {json.dumps({'status': 'updated'})}\\n\\n"
+            return
+            
+        yield f"data: {json.dumps({'status': 'updating', 'progress': 0})}\\n\\n"
+        
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-u", "append_tencent.py",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=BASE_DIR
+        )
+        
+        # tqdm 默认使用 \r 刷新，因此不能用 readline()
+        async def read_until_cr_or_lf(stream):
+            res = bytearray()
+            while True:
+                chunk = await stream.read(1)
+                if not chunk:
+                    break
+                if chunk in (b'\\r', b'\\n'):
+                    break
+                res.extend(chunk)
+            return res.decode('utf-8', errors='ignore')
+            
+        import re
+        while True:
+            line = await read_until_cr_or_lf(process.stdout)
+            if not line:
+                if process.stdout.at_eof():
+                    break
+                else:
+                    await asyncio.sleep(0.01)
+                    continue
+            
+            # 从 line 中解析类似 " 25%|" 的进度
+            match = re.search(r'(\\d+)%', line)
+            if match:
+                pct = int(match.group(1))
+                yield f"data: {json.dumps({'status': 'updating', 'progress': pct})}\\n\\n"
+                
+        await process.wait()
+        
+        # 记录今天已经检查/更新过
+        try:
+            os.makedirs(data_dir, exist_ok=True)
+            with open(lock_file, "w") as f:
+                f.write(target_date)
+        except:
+            pass
+            
+        yield f"data: {json.dumps({'status': 'done', 'progress': 100})}\\n\\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ── 本地启动 ──────────────────────────────────────────────

@@ -108,13 +108,67 @@
                     <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">选择策略模型</label>
                     <div class="relative">
                         <select id="strategy-selector"
+                            onchange="document.getElementById('brick-params').classList.toggle('hidden', this.value !== 'brick')"
                             class="w-full rounded-lg border border-slate-300 bg-white text-text-main text-sm h-10 pl-3 pr-10 focus:ring-2 focus:ring-primary focus:border-transparent appearance-none shadow-sm bg-none font-medium">
-                            <option value="rsv">RSV超卖</option>
                             <option value="brick">超跌反弹</option>
+                            <option value="rsv">RSV超卖</option>
                             <option value="small_bank">小市值</option>
                         </select>
                         <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
                             <span class="material-symbols-outlined text-sm">expand_more</span>
+                        </div>
+                    </div>
+
+                    <!-- 超跌反弹策略专属参数配置区 -->
+                    <div id="brick-params"
+                        class="mt-2 bg-slate-50 border border-slate-200 rounded-lg p-3 flex flex-col gap-3">
+                        <div class="flex items-center justify-between text-xs">
+                            <label class="text-slate-600 font-bold">短期均线天数</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="brick-ma-short" value="5" min="1" max="20"
+                                    class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none">
+                                <span class="text-slate-400">日</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between text-xs">
+                            <label class="text-slate-600 font-bold">长期均线天数</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="brick-ma-long" value="60" min="20" max="250"
+                                    class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none">
+                                <span class="text-slate-400">日</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between text-xs">
+                            <label class="text-slate-600 font-bold">低于短均线天数</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="brick-below-days" value="5" min="1" max="20"
+                                    class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none">
+                                <span class="text-slate-400">日</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between text-xs">
+                            <label class="text-slate-600 font-bold">要求回调深度</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="brick-callback" value="1.0" min="0" max="20" step="0.5"
+                                    class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none">
+                                <span class="text-slate-400">%</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between text-xs">
+                            <label class="text-slate-600 font-bold">J值上限</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="brick-kdj-limit" value="0.0" min="-50" max="100" step="1"
+                                    class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none">
+                                <span class="text-slate-400 invisible">日</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between text-xs">
+                            <label class="text-slate-600 font-bold">持仓上限</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="max-positions-brick" value="10" min="1" max="50" step="1"
+                                    class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none font-bold text-slate-700">
+                                <span class="text-slate-400">只</span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -286,35 +340,13 @@
 
                 <!-- Brick 策略参数配置面版 -->
                 <div id="strategy-params-brick" style="display: none;" class="flex flex-col gap-6">
-                    <div class="flex flex-col gap-2">
-                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">参数设置</label>
-                        <div class="space-y-2">
-                            <details class="group rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
-                                open="">
-                                <summary
-                                    class="flex cursor-pointer items-center justify-between px-3 py-2 select-none hover:bg-slate-100 transition-colors">
-                                    <span class="text-sm font-medium text-slate-700">配置参数</span>
-                                    <span
-                                        class="material-symbols-outlined text-slate-400 text-sm group-open:rotate-180 transition-transform">expand_more</span>
-                                </summary>
-                                <div class="px-3 pb-3 pt-1 border-t border-slate-200 border-dashed bg-white">
-                                    <div class="flex gap-2 items-center justify-between mt-2">
-                                        <label class="text-xs text-slate-700 font-bold whitespace-nowrap">持仓上限
-                                            (只)</label>
-                                        <input id="max-positions-brick"
-                                            class="w-16 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700 font-bold"
-                                            type="number" value="10" />
-                                    </div>
-                                </div>
-                            </details>
-                        </div>
-                    </div>
+
                     <div class="flex flex-col gap-3">
                         <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">交易执行与目标</label>
                         <div class="p-3 rounded-lg bg-primary/5 border border-primary/20 shadow-sm">
                             <ul class="text-xs text-slate-700 space-y-2 list-disc list-inside">
                                 <li><strong>买入时机：</strong> 次日 09:30 开盘集合竞价买入，跳空 ≤ 0.5%</li>
-                                <li><strong>卖出逻辑：</strong> 次日 09:30 开盘若盈利超1%即止盈，否则次日 14:55 无条件清仓卖出</li>
+                                <li><strong>卖出逻辑：</strong> 买入后每天 14:55 检查，若收盘价低于短期均线（如 5日线）则卖出清仓</li>
                             </ul>
                         </div>
                     </div>
@@ -801,11 +833,112 @@
 
                 const excludeStr = excludeArr.join(',');
 
+                // 新增：如果当前策略是 brick，自动追加自定义参数
+                let finalExcludeStr = excludeStr;
+                if (strategy === 'brick') {
+                    const maShort = document.getElementById('brick-ma-short').value || 5;
+                    const maLong = document.getElementById('brick-ma-long').value || 60;
+                    const belowDays = document.getElementById('brick-below-days').value || 5;
+                    const callback = document.getElementById('brick-callback').value || 1.0;
+                    const kdjLimit = document.getElementById('brick-kdj-limit').value || 0.0;
+
+                    const brickParams = [
+                        `brick_ma_short:${maShort}`,
+                        `brick_ma_long:${maLong}`,
+                        `brick_below_days:${belowDays}`,
+                        `brick_callback:${callback}`,
+                        `brick_kdj_limit:${kdjLimit}`
+                    ].join(',');
+                    finalExcludeStr = finalExcludeStr ? `${finalExcludeStr},${brickParams}` : brickParams;
+                }
+
                 startBtn.disabled = true;
                 startBtn.innerHTML = '<span class="material-symbols-outlined animate-spin">sync</span> 正在为您跳转...';
-                window.location.href = `/report?start=1&start_date=${startDate}&end_date=${endDate}&strategy=${strategy}&initial_capital=${initialCapital}&max_positions=${maxPositions}&exclude=${excludeStr}`;
+                window.location.href = `/report?start=1&start_date=${startDate}&end_date=${endDate}&strategy=${strategy}&initial_capital=${initialCapital}&max_positions=${maxPositions}&exclude=${finalExcludeStr}`;
             });
         }
+    </script>
+    <!-- 更新数据弹窗 -->
+    <div id="update-modal"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm hidden">
+        <div class="bg-white rounded-2xl shadow-2xl p-8 w-[400px] max-w-[90%] flex flex-col items-center">
+            <div
+                class="size-16 rounded-full bg-blue-50 flex items-center justify-center mb-6 border border-blue-100 shadow-inner">
+                <span class="material-symbols-outlined text-3xl text-primary animate-pulse">cloud_sync</span>
+            </div>
+            <h3 class="text-xl font-bold text-slate-900 mb-2" id="update-title">检查数据更新</h3>
+            <p class="text-sm text-slate-500 mb-6 text-center" id="update-desc">正在连接服务器检查最新股票数据，请稍候...</p>
+
+            <div class="w-full bg-slate-100 rounded-full h-3 mb-2 overflow-hidden border border-slate-200">
+                <div id="update-progress-bar"
+                    class="bg-primary h-full rounded-full transition-all duration-300 relative overflow-hidden"
+                    style="width: 0%">
+                    <div class="absolute inset-0 bg-white/20 w-full animate-[shimmer_1.5s_infinite]"
+                        style="background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent); transform: skewX(-20deg);">
+                    </div>
+                </div>
+            </div>
+            <div class="w-full flex justify-between text-xs font-bold text-slate-400">
+                <span>0%</span>
+                <span id="update-progress-text">0%</span>
+                <span>100%</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 数据更新检查逻辑 -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const modal = document.getElementById('update-modal');
+            const progressBar = document.getElementById('update-progress-bar');
+            const progressText = document.getElementById('update-progress-text');
+            const title = document.getElementById('update-title');
+            const desc = document.getElementById('update-desc');
+
+            // 页面加载后发起检查请求
+            const eventSource = new EventSource('/api/check_and_update');
+            let isFirstMessage = true;
+
+            eventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.status === 'updated') {
+                    // 不需要更新
+                    eventSource.close();
+                    modal.classList.add('hidden');
+                } else if (data.status === 'updating') {
+                    if (isFirstMessage) {
+                        modal.classList.remove('hidden');
+                        title.textContent = '正在同步数据';
+                        desc.textContent = '发现新交易日数据，正在从腾讯服务器下载更新...';
+                        isFirstMessage = false;
+                    }
+                    progressBar.style.width = data.progress + '%';
+                    progressText.textContent = data.progress + '%';
+                } else if (data.status === 'done') {
+                    progressBar.style.width = '100%';
+                    progressText.textContent = '100%';
+                    title.textContent = '更新完成';
+                    desc.textContent = '数据已同步至最新，可以开始回测了！';
+
+                    setTimeout(() => {
+                        modal.classList.add('hidden');
+                        eventSource.close();
+                    }, 1500);
+                }
+            };
+
+            eventSource.onerror = (error) => {
+                console.error("SSE Error:", error);
+                title.textContent = '更新超时';
+                desc.textContent = '数据可能正在后台继续更新，您可以稍后再来查看';
+                progressBar.classList.replace('bg-primary', 'bg-amber-500');
+                eventSource.close();
+                setTimeout(() => {
+                    modal.classList.add('hidden');
+                }, 3000);
+            };
+        });
     </script>
 </body>
 

@@ -112,6 +112,7 @@
                     <label class="text-xs font-bold uppercase tracking-wider text-slate-400">选择策略模型</label>
                     <div class="relative">
                         <select id="strategy-selector"
+                            onchange="document.getElementById('brick-params').classList.toggle('hidden', this.value !== 'brick')"
                             class="w-full h-10 rounded-lg border border-slate-300 bg-white text-sm font-medium focus:ring-2 focus:ring-primary focus:border-transparent appearance-none px-3">
                             <option value="brick">超跌反弹</option>
                             <option value="rsv">RSV超卖</option>
@@ -120,6 +121,51 @@
                         <div
                             class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 flex items-center">
                             <span class="material-symbols-outlined text-sm">expand_more</span>
+                        </div>
+                    </div>
+
+                    <!-- 超跌反弹策略专属参数配置区 -->
+                    <div id="brick-params"
+                        class="mt-2 bg-slate-50 border border-slate-200 rounded-lg p-3 flex flex-col gap-3">
+                        <div class="flex items-center justify-between text-xs">
+                            <label class="text-slate-600 font-bold">短期均线天数</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="brick-ma-short" value="5" min="1" max="20"
+                                    class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none text-slate-700">
+                                <span class="text-slate-400">日</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between text-xs">
+                            <label class="text-slate-600 font-bold">长期均线天数</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="brick-ma-long" value="60" min="20" max="250"
+                                    class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none text-slate-700">
+                                <span class="text-slate-400">日</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between text-xs">
+                            <label class="text-slate-600 font-bold">低于短均线天数</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="brick-below-days" value="5" min="1" max="20"
+                                    class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none text-slate-700">
+                                <span class="text-slate-400">日</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between text-xs">
+                            <label class="text-slate-600 font-bold">要求回调深度</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="brick-callback" value="1.0" min="0" max="20" step="0.5"
+                                    class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none text-slate-700">
+                                <span class="text-slate-400">%</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between text-xs">
+                            <label class="text-slate-600 font-bold">J值上限</label>
+                            <div class="flex items-center gap-1">
+                                <input type="number" id="brick-kdj-limit" value="0.0" min="-50" max="100" step="1"
+                                    class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none text-slate-700">
+                                <span class="text-slate-400 invisible">日</span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -196,11 +242,24 @@
             <div class="flex-1 flex gap-6 overflow-hidden">
                 <!-- 左侧列表: 占 30% - 40% -->
                 <div
-                    class="w-[380px] flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden shrink-0">
+                    class="w-[520px] flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden shrink-0">
                     <div class="px-4 py-3 bg-slate-50/50 border-b border-slate-100 flex items-center justify-between">
-                        <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest">个股清单</span>
+                        <div class="flex items-center gap-3">
+                            <span
+                                class="text-xs font-black text-slate-400 uppercase tracking-widest shrink-0">个股清单</span>
+                            <div class="flex items-center bg-slate-200/50 rounded-lg p-0.5 ml-2">
+                                <button id="sort-pct"
+                                    class="px-3 py-1 text-xs font-bold text-slate-500 rounded hover:bg-white hover:shadow-sm transition-all focus:outline-none flex items-center gap-0.5"
+                                    onclick="toggleSort('pct_chg')">按涨幅</button>
+                                <button id="sort-score"
+                                    class="px-3 py-1 text-xs font-bold text-primary bg-white shadow-sm rounded transition-all focus:outline-none flex items-center gap-0.5"
+                                    onclick="toggleSort('score')">按得分 <span
+                                        class="material-symbols-outlined !text-xs">arrow_downward</span></button>
+                            </div>
+                        </div>
                         <span id="stock-count-badge"
-                            class="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-bold">5 只</span>
+                            class="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-bold shrink-0">5
+                            只</span>
                     </div>
                     <div class="flex-1 overflow-y-auto custom-scrollbar">
                         <table class="w-full text-left border-collapse">
@@ -240,6 +299,11 @@
                                             <span>综合评分: <span id="view-stock-score"
                                                     class="text-primary italic">--</span></span>
                                         </div>
+                                        <div class="w-px h-3 bg-slate-200"></div>
+                                        <div class="flex items-center gap-1.5 text-slate-500 font-bold text-sm">
+                                            <span class="material-symbols-outlined !text-sm">location_on</span>
+                                            <span id="view-stock-region" class="text-slate-600">--</span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -251,10 +315,6 @@
                                 <div class="flex items-center gap-4">
                                     <button
                                         class="px-4 py-1.5 rounded-full bg-primary text-white text-[11px] font-black shadow-lg shadow-primary/20">日K线</button>
-                                    <button
-                                        class="px-4 py-1.5 rounded-full text-slate-400 text-[11px] font-black hover:bg-slate-100 transition-colors">分时图</button>
-                                    <button
-                                        class="px-4 py-1.5 rounded-full text-slate-400 text-[11px] font-black hover:bg-slate-100 transition-colors">F10资料</button>
                                 </div>
                                 <div class="flex items-center gap-2">
                                     <span id="chart-status"
@@ -318,13 +378,48 @@
             const logProgress = document.getElementById('log-progress');
 
             let klineChart = null;
+            let currentStocks = [];
+            let currentSortMode = { key: 'score', desc: true };
+
+            async function toggleSort(key) {
+                if (currentSortMode.key === key) {
+                    currentSortMode.desc = !currentSortMode.desc;
+                } else {
+                    currentSortMode.key = key;
+                    currentSortMode.desc = true;
+                }
+
+                // Update UI styles for buttons
+                document.getElementById('sort-pct').className = 'px-3 py-1 text-xs font-bold text-slate-500 rounded hover:bg-white hover:shadow-sm transition-all focus:outline-none flex items-center gap-0.5';
+                document.getElementById('sort-score').className = 'px-3 py-1 text-xs font-bold text-slate-500 rounded hover:bg-white hover:shadow-sm transition-all focus:outline-none flex items-center gap-0.5';
+
+                const activeBtn = key === 'pct_chg' ? document.getElementById('sort-pct') : document.getElementById('sort-score');
+                activeBtn.className = 'px-3 py-1 text-xs font-bold text-primary bg-white shadow-sm rounded transition-all focus:outline-none flex items-center gap-0.5';
+                activeBtn.innerHTML = `按${key === 'pct_chg' ? '涨幅' : '得分'} <span class="material-symbols-outlined !text-xs font-bold transition-transform">${currentSortMode.desc ? 'arrow_downward' : 'arrow_upward'}</span>`;
+
+                const inactiveBtn = key === 'pct_chg' ? document.getElementById('sort-score') : document.getElementById('sort-pct');
+                inactiveBtn.innerHTML = `按${key === 'pct_chg' ? '得分' : '涨幅'}`;
+
+                if (currentStocks.length > 0) {
+                    sortStocks();
+                }
+            }
+
+            function sortStocks() {
+                currentStocks.sort((a, b) => {
+                    let valA = parseFloat(a[currentSortMode.key]) || 0;
+                    let valB = parseFloat(b[currentSortMode.key]) || 0;
+                    return currentSortMode.desc ? valB - valA : valA - valB;
+                });
+                renderTable(currentStocks);
+            }
 
             // 初始化图表实例
             window.addEventListener('resize', () => {
                 if (klineChart) klineChart.resize();
             });
 
-            async function selectStock(code, name, price, score) {
+            async function selectStock(code, name, price, score, region, industry) {
                 const chartDom = document.getElementById('kline-chart');
                 const loading = document.getElementById('chart-loading');
 
@@ -333,6 +428,10 @@
                 document.getElementById('view-stock-code').textContent = code;
                 document.getElementById('view-stock-price').textContent = `¥${price}`;
                 document.getElementById('view-stock-score').textContent = score;
+                const regionElem = document.getElementById('view-stock-region');
+                if (regionElem) {
+                    regionElem.textContent = region ? region : '--';
+                }
 
                 // 切换列表选中状态
                 document.querySelectorAll('#result-table-body tr').forEach(tr => {
@@ -607,6 +706,20 @@
                 if (document.getElementById('exclude-cy').checked) excludes.push('cy');
                 if (document.getElementById('exclude-bse').checked) excludes.push('bse');
 
+                if (strategy === 'brick') {
+                    const maShort = document.getElementById('brick-ma-short').value || 5;
+                    const maLong = document.getElementById('brick-ma-long').value || 60;
+                    const belowDays = document.getElementById('brick-below-days').value || 5;
+                    const callback = document.getElementById('brick-callback').value || 1.0;
+                    const kdjLimit = document.getElementById('brick-kdj-limit').value || 0.0;
+
+                    excludes.push(`brick_ma_short:${maShort}`);
+                    excludes.push(`brick_ma_long:${maLong}`);
+                    excludes.push(`brick_below_days:${belowDays}`);
+                    excludes.push(`brick_callback:${callback}`);
+                    excludes.push(`brick_kdj_limit:${kdjLimit}`);
+                }
+
                 // UI Init
                 runBtn.disabled = true;
                 spinner.classList.remove('hidden');
@@ -669,7 +782,25 @@
                     const data = await response.json();
 
                     if (data.data && data.data.length > 0) {
-                        renderTable(data.data);
+                        currentStocks = data.data;
+
+                        // 保存至本地缓存，避免刷新网页丢失数据
+                        localStorage.setItem('selectCache', JSON.stringify({
+                            date: document.getElementById('target-date').value,
+                            strategy: document.getElementById('strategy-selector').value,
+                            brickParams: document.getElementById('strategy-selector').value === 'brick' ? {
+                                maShort: document.getElementById('brick-ma-short').value,
+                                maLong: document.getElementById('brick-ma-long').value,
+                                belowDays: document.getElementById('brick-below-days').value,
+                                callback: document.getElementById('brick-callback').value,
+                                kdjLimit: document.getElementById('brick-kdj-limit').value
+                            } : null,
+                            stocks: data.data,
+                            count: data.count,
+                            resDate: data.date
+                        }));
+
+                        sortStocks(); // 根据当前排序模式渲染
                         resultInfo.textContent = `选股完成！在 ${data.date} 共有 ${data.count} 只个股符合信号`;
                     } else {
                         tableBody.innerHTML = '<tr><td colspan="5" class="px-6 py-20 text-center text-amber-400 font-medium">未找到符合条件的个股</td></tr>';
@@ -697,39 +828,64 @@
                     tr.className = 'hover:bg-slate-50 transition-all group cursor-pointer border-l-4 border-transparent hover:border-primary/30';
 
                     // 绑定移入自动切换
-                    tr.onmouseenter = () => selectStock(s.code, s.name, s.close, s.score);
+                    tr.onmouseenter = () => selectStock(s.code, s.name, s.close, s.score, s.region, s.industry);
 
                     const colorClass = s.pct_chg >= 0 ? 'text-red-600' : 'text-emerald-600';
                     const sign = s.pct_chg > 0 ? '+' : '';
                     tr.innerHTML = `
                     <td class="px-4 py-4">
                         <div class="flex flex-col">
-                            <span class="text-sm font-black text-slate-900 group-hover:text-primary transition-colors">${s.name}</span>
-                            <span class="text-[10px] font-mono font-bold text-slate-400 mt-0.5">${s.code}</span>
+                            <span class="text-base font-black text-slate-900 group-hover:text-primary transition-colors">${s.name}</span>
+                            <span class="text-xs font-mono font-bold text-slate-400 mt-1">${s.code}</span>
                         </div>
                     </td>
                     <td class="px-4 py-4 text-right">
                         <div class="flex flex-col items-end">
-                            <span class="text-sm font-mono font-bold text-slate-700">¥${s.close}</span>
-                            <span class="text-[10px] font-bold ${colorClass} mt-0.5">${sign}${s.pct_chg}%</span>
+                            <span class="text-base font-mono font-bold text-slate-700">¥${s.close}</span>
+                            <span class="text-xs font-bold ${colorClass} mt-1">${sign}${s.pct_chg}%</span>
                         </div>
                     </td>
                     <td class="px-2 py-4 text-right">
-                         <span class="text-[10px] font-black text-primary/60 italic">得分: ${s.score}</span>
+                         <span class="text-xs font-black text-primary/60 italic">得分: ${s.score}</span>
                     </td>
                     <td class="px-4 py-4 text-right w-10">
-                        <span class="material-symbols-outlined text-slate-200 group-hover:text-primary transition-all !text-lg">chevron_right</span>
+                        <span class="material-symbols-outlined text-slate-200 group-hover:text-primary transition-all !text-xl">chevron_right</span>
                     </td>
                 `;
                     tableBody.appendChild(tr);
 
                     // 默认选中第一只
-                    if (idx === 0) selectStock(s.code, s.name, s.close, s.score);
+                    if (idx === 0) selectStock(s.code, s.name, s.close, s.score, s.region, s.industry);
                 });
             }
 
-            // 设置默认日期为昨天
+            // 设置默认日期为昨天，并尝试恢复页面状态
             window.addEventListener('DOMContentLoaded', () => {
+                const cached = localStorage.getItem('selectCache');
+                if (cached) {
+                    try {
+                        const parsed = JSON.parse(cached);
+                        document.getElementById('target-date').value = parsed.date;
+                        document.getElementById('strategy-selector').value = parsed.strategy;
+
+                        document.getElementById('brick-params').classList.toggle('hidden', parsed.strategy !== 'brick');
+                        if (parsed.strategy === 'brick' && parsed.brickParams) {
+                            document.getElementById('brick-ma-short').value = parsed.brickParams.maShort || 5;
+                            document.getElementById('brick-ma-long').value = parsed.brickParams.maLong || 60;
+                            document.getElementById('brick-below-days').value = parsed.brickParams.belowDays || 5;
+                            document.getElementById('brick-callback').value = parsed.brickParams.callback || 1.0;
+                            document.getElementById('brick-kdj-limit').value = parsed.brickParams.kdjLimit || 0.0;
+                        }
+
+                        currentStocks = parsed.stocks;
+                        sortStocks();
+                        resultInfo.textContent = `选股完成！在 ${parsed.resDate} 共有 ${parsed.count} 只个股符合信号 (数据已恢复本地缓存)`;
+                        return; // 结束执行默认日期
+                    } catch (e) {
+                        console.error('缓存解析失败:', e);
+                    }
+                }
+
                 const d = new Date();
                 d.setDate(d.getDate() - 1);
                 document.getElementById('target-date').value = d.toISOString().split('T')[0];
