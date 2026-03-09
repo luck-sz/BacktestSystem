@@ -117,6 +117,7 @@
                             <option value="brick">超跌反弹</option>
                             <option value="rsv">RSV超卖</option>
                             <option value="small_bank">小市值</option>
+                            <option value="green_rebound">绿柱反弹 (MACD极限)</option>
                         </select>
                         <div
                             class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 flex items-center">
@@ -332,11 +333,17 @@
                                 </div>
                                 <!-- KDJ 指标数值悬浮显示 (参考同花顺风格) -->
                                 <div id="kdj-legend"
-                                    class="absolute left-[72px] top-[82.2%] z-10 pointer-events-none flex items-center gap-4 text-[12px] font-bold tracking-tight">
+                                    class="absolute left-[72px] top-[65%] z-10 pointer-events-none flex items-center gap-4 text-[12px] font-bold tracking-tight">
                                     <span class="text-slate-300">KDJ(9,3,3)</span>
                                     <span id="label-k" class="text-slate-900">K: --</span>
                                     <span id="label-d" style="color: #f97316">D: --</span>
                                     <span id="label-j" style="color: #db2777">J: --</span>
+                                </div>
+                                <!-- Brick 砖型指标数值 -->
+                                <div id="brick-legend"
+                                    class="absolute left-[72px] top-[82%] z-10 pointer-events-none flex items-center gap-4 text-[12px] font-bold tracking-tight">
+                                    <span class="text-slate-300">砖型动量</span>
+                                    <span id="label-brick" class="text-primary">Brick: --</span>
                                 </div>
                                 <div id="kline-chart" class="absolute inset-0 w-full h-full"></div>
                                 <div id="chart-loading"
@@ -471,6 +478,15 @@
                 const j = rawData.map(item => item[8]);
                 const ma5 = rawData.map(item => item[9]);
                 const ma60 = rawData.map(item => item[10]);
+                const brickData = rawData.map(item => item[11]);
+
+                // 将砖型数据转换为 Candlestick 格式 [open, close, low, high] = [prev, curr, min, max]
+                // 这样可以完美实现浮动式画柱 (类似 TDX STICKLINE)
+                const brickCandleData = rawData.map(item => {
+                    const curr = parseFloat(item[11]) || 0;
+                    const prev = parseFloat(item[12]) || 0;
+                    return [prev, curr, Math.min(prev, curr), Math.max(prev, curr)];
+                });
 
                 const option = {
                     backgroundColor: '#ffffff',
@@ -525,9 +541,10 @@
                         label: { backgroundColor: '#135bec' }
                     },
                     grid: [
-                        { left: '60', right: '30', height: '45%', top: '10%' },
-                        { left: '60', right: '30', top: '65%', height: '12%' },
-                        { left: '60', right: '30', top: '82%', height: '12%' }
+                        { left: '60', right: '30', top: '8%', height: '36%' },
+                        { left: '60', right: '30', top: '48%', height: '14%' },
+                        { left: '60', right: '30', top: '65%', height: '14%' },
+                        { left: '60', right: '30', top: '82%', height: '14%' }
                     ],
                     xAxis: [
                         {
@@ -549,6 +566,15 @@
                         {
                             type: 'category',
                             gridIndex: 2,
+                            data: dates,
+                            boundaryGap: false,
+                            axisLine: { lineStyle: { color: '#e2e8f0' } },
+                            axisLabel: { show: false },
+                            splitLine: { show: false }
+                        },
+                        {
+                            type: 'category',
+                            gridIndex: 3,
                             data: dates,
                             boundaryGap: false,
                             axisLine: { lineStyle: { color: '#e2e8f0' } },
@@ -575,14 +601,23 @@
                         {
                             scale: true,
                             gridIndex: 2,
+                            splitNumber: 2,
+                            axisLabel: { color: '#94a3b8', fontSize: 10 },
+                            axisLine: { lineStyle: { color: '#e2e8f0' } },
+                            splitLine: { lineStyle: { color: '#f1f5f9' } }
+                        },
+                        {
+                            scale: true,
+                            gridIndex: 3,
+                            splitNumber: 2,
                             axisLabel: { color: '#94a3b8', fontSize: 10 },
                             axisLine: { lineStyle: { color: '#e2e8f0' } },
                             splitLine: { lineStyle: { color: '#f1f5f9' } }
                         }
                     ],
                     dataZoom: [
-                        { type: 'inside', xAxisIndex: [0, 1, 2], startValue: dates.length > 45 ? dates.length - 45 : 0, endValue: dates.length - 1 },
-                        { show: true, xAxisIndex: [0, 1, 2], type: 'slider', bottom: '0%', height: 20, startValue: dates.length > 45 ? dates.length - 45 : 0, endValue: dates.length - 1 }
+                        { type: 'inside', xAxisIndex: [0, 1, 2, 3], startValue: dates.length > 45 ? dates.length - 45 : 0, endValue: dates.length - 1 },
+                        { show: true, xAxisIndex: [0, 1, 2, 3], type: 'slider', bottom: '0%', height: 20, startValue: dates.length > 45 ? dates.length - 45 : 0, endValue: dates.length - 1 }
                     ],
                     series: [
                         {
@@ -653,6 +688,20 @@
                             showSymbol: false,
                             smooth: true,
                             lineStyle: { width: 1.2, color: '#db2777' } // Pink-600
+                        },
+                        {
+                            name: 'Brick',
+                            type: 'candlestick',
+                            xAxisIndex: 3,
+                            yAxisIndex: 3,
+                            data: brickCandleData,
+                            itemStyle: {
+                                // TDX 效果：上升阶段为红色（COLORRED），下降为绿色（COLOR00FF00）
+                                color: '#ef4444',      // 阳线，curr >= prev (上涨)
+                                color0: '#22c55e',     // 阴线，curr < prev (下跌)
+                                borderColor: '#ef4444',
+                                borderColor0: '#22c55e'
+                            }
                         }
                     ]
                 };
@@ -663,6 +712,7 @@
                     const latest = rawData[rawData.length - 1];
                     updateKDJLabels(latest[6], latest[7], latest[8]);
                     updateMALabels(latest[9], latest[10]);
+                    updateBrickLabel(latest[11]);
                 }
 
                 // 悬浮联动更新指标值
@@ -673,9 +723,15 @@
                             const point = rawData[dataIndex];
                             updateKDJLabels(point[6], point[7], point[8]);
                             updateMALabels(point[9], point[10]);
+                            updateBrickLabel(point[11]);
                         }
                     }
                 });
+
+                function updateBrickLabel(brick_val) {
+                    const lb = document.getElementById('label-brick');
+                    if (lb) lb.textContent = `Brick: ${parseFloat(brick_val).toFixed(2)}`;
+                }
 
                 function updateKDJLabels(k_val, d_val, j_val) {
                     const lk = document.getElementById('label-k');

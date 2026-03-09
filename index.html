@@ -113,6 +113,7 @@
                             <option value="brick">超跌反弹</option>
                             <option value="rsv">RSV超卖</option>
                             <option value="small_bank">小市值</option>
+                            <option value="green_rebound">绿柱反弹 (MACD极限)</option>
                         </select>
                         <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
                             <span class="material-symbols-outlined text-sm">expand_more</span>
@@ -468,11 +469,49 @@
                     </div>
                 </div>
 
+                <!-- 绿柱反弹 策略参数配置面版 -->
+                <div id="strategy-params-green_rebound" style="display: none;" class="flex flex-col gap-6">
+                    <div class="flex flex-col gap-2">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">策略设置</label>
+                        <div class="space-y-2">
+                            <details class="group rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
+                                open="">
+                                <summary
+                                    class="flex cursor-pointer items-center justify-between px-3 py-2 select-none hover:bg-slate-100 transition-colors">
+                                    <span class="text-sm font-medium text-slate-700">基础参数</span>
+                                    <span
+                                        class="material-symbols-outlined text-slate-400 text-sm group-open:rotate-180 transition-transform">expand_more</span>
+                                </summary>
+                                <div class="px-3 pb-3 pt-2 border-t border-slate-200 border-dashed bg-white">
+                                    <div class="flex gap-2 items-center justify-between mt-2">
+                                        <label
+                                            class="text-xs text-slate-700 font-bold whitespace-nowrap">持仓上限(只)</label>
+                                        <input id="max-positions-green_rebound"
+                                            class="w-16 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700 font-bold"
+                                            type="number" value="5" />
+                                        <div class="mt-3 text-[11px] text-slate-500">基于砖型指标动能收缩，结合 KDJ
+                                            超跌拐头（J&lt;0且向上）且收盘价站上 60 日线。</div>
+                                    </div>
+                            </details>
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-3">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">交易执行与目标</label>
+                        <div class="p-3 rounded-lg bg-primary/5 border border-primary/20 shadow-sm">
+                            <ul class="text-xs text-slate-700 space-y-2 list-disc list-inside">
+                                <li><strong>买入时机：</strong> T+1日 开盘等权买入</li>
+                                <li><strong>卖出逻辑：</strong> 遇到5%止盈/止损或者持仓满4天无条件清仓</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
                 <script>
                     const selector = document.getElementById('strategy-selector');
                     const paramsRSV = document.getElementById('strategy-params-rsv');
                     const paramsBrick = document.getElementById('strategy-params-brick');
                     const paramsSmallBank = document.getElementById('strategy-params-small_bank');
+                    const paramsGreenRebound = document.getElementById('strategy-params-green_rebound');
                     const titleText = document.getElementById('strategy-title');
                     const descText = document.getElementById('strategy-desc');
 
@@ -481,18 +520,28 @@
                             paramsRSV.style.display = 'none';
                             paramsBrick.style.display = 'flex';
                             paramsSmallBank.style.display = 'none';
+                            paramsGreenRebound.style.display = 'none';
                             titleText.textContent = '超跌反弹';
                             descText.textContent = 'KDJ深水超卖+突破MA60趋势的多因子共振短线策略';
                         } else if (this.value === 'small_bank') {
                             paramsRSV.style.display = 'none';
                             paramsBrick.style.display = 'none';
                             paramsSmallBank.style.display = 'flex';
+                            paramsGreenRebound.style.display = 'none';
                             titleText.textContent = '小市值';
                             descText.textContent = '避开财报季暴雷配置三大行，其余时间做量价优选小市值';
+                        } else if (this.value === 'green_rebound') {
+                            paramsRSV.style.display = 'none';
+                            paramsBrick.style.display = 'none';
+                            paramsSmallBank.style.display = 'none';
+                            paramsGreenRebound.style.display = 'flex';
+                            titleText.textContent = '绿柱反弹';
+                            descText.textContent = 'MACD绿色柱子极度缩窄时的左侧右切点预判买入策略';
                         } else {
                             paramsRSV.style.display = 'flex';
                             paramsBrick.style.display = 'none';
                             paramsSmallBank.style.display = 'none';
+                            paramsGreenRebound.style.display = 'none';
                             titleText.textContent = 'RSV超卖';
                             descText.textContent = '捕捉底背离及缩量的超跌反弹短线策略';
                         }
@@ -798,6 +847,8 @@
                     maxPositions = document.getElementById('max-positions-brick').value || '10';
                 } else if (strategy === 'small_bank') {
                     maxPositions = document.getElementById('max-positions-small_bank').value || '7';
+                } else if (strategy === 'green_rebound') {
+                    maxPositions = document.getElementById('max-positions-green_rebound').value || '5';
                 }
 
                 // 收集所有排除条件

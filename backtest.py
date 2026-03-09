@@ -35,6 +35,7 @@ STRATEGY_NAMES = {
     "rsv":   "RSV超卖",
     "brick": "超跌反弹",
     "small_bank": "小市值",
+    "green_rebound": "绿柱缩短",
 }
 
 MIN_ROWS = 25  # 数据行数过少则跳过
@@ -141,10 +142,62 @@ def _calc_small_bank(df: pd.DataFrame, exclude_boards: list[str] = None) -> pd.D
     return df
 
 
+def _calc_green_rebound(df: pd.DataFrame, exclude_boards: list[str] = None) -> pd.DataFrame:
+    """绿柱极限缩水反弹策略指标 (基于砖型指标动能减速)"""
+    # 1. 砖型指标核心公式
+    hhv4 = df["high"].rolling(4).max()
+    llv4 = df["low"].rolling(4).min()
+    diff4 = (hhv4 - llv4).clip(lower=0.001)
+    
+    var1a = (hhv4 - df["close"]) / diff4 * 100 - 90
+    var2a = var1a.ewm(alpha=1/4, adjust=False).mean() + 100
+    var3a = (df["close"] - llv4) / diff4 * 100
+    var4a = var3a.ewm(alpha=1/6, adjust=False).mean()
+    var5a = var4a.ewm(alpha=1/6, adjust=False).mean() + 100
+    v6a = var5a - var2a
+    
+    # 2. 动量砖计算 (严格遵循用户源码 IF(VAR6A>4,VAR6A-4,0))
+    m0 = np.where(v6a > 4, v6a - 4, 0.0)
+    m1 = pd.Series(m0).shift(1).values
+    m2 = pd.Series(m0).shift(2).values
+    
+    # 3. KDJ 计算 (9, 3, 3)
+    low9  = df["low"].rolling(9).min()
+    high9 = df["high"].rolling(9).max()
+    diff9 = (high9 - low9).clip(lower=0.001)
+    rsv   = (df["close"] - low9) / diff9 * 100
+    k     = rsv.ewm(alpha=1/3, adjust=False).mean()
+    d     = k.ewm(alpha=1/3, adjust=False).mean()
+    j     = 3 * k - 2 * d
+    j_0   = j
+    j_1   = j.shift(1)
+
+    # 4. 选股逻辑：
+    # 区域 A: 砖型动能收缩
+    drop_len_0 = m1 - m0
+    drop_len_1 = m2 - m1
+    is_falling = drop_len_0 > 0
+    is_decelerating = drop_len_0 < drop_len_1
+    
+    # 区域 B: KDJ 超跌拐头 (J值向上且处于水下)
+    j_ok = (j_0 > j_1) & (j_1 < 0)
+    
+    # 区域 C: 趋势保护 (收盘价需站上60日均线)
+    ma60 = df["close"].rolling(60).mean()
+    trend_ok = df["close"] > ma60
+    
+    df["buy_signal"] = is_falling & is_decelerating & j_ok & trend_ok
+    
+    # 5. 得分逻辑：长度（下落幅度）越接近于 0，得分越高
+    df["green_score"] = 1.0 / (drop_len_0 + 1e-6)
+    
+    return df
+
 _INDICATOR_FUNCS = {
     "rsv":   _calc_rsv,
     "brick": _calc_brick,
     "small_bank": _calc_small_bank,
+    "green_rebound": _calc_green_rebound,
 }
 
 def _is_bank_period(dt: pd.Timestamp) -> bool:
@@ -531,6 +584,13 @@ def _judge_sell(strategy: str, hold_days: int, profit_pct: float) -> str | None:
     if strategy == "rsv":
         if hold_days >= 2:
             return "持仓满2天尾盘卖出"
+    elif strategy == "green_rebound":
+        if hold_days >= 4:
+            return "持仓满4天无条件清仓"
+        elif profit_pct > 5.0:
+            return "盈利超5%止盈"
+        elif profit_pct < -5.0:
+            return "亏损超5%止损"
     return None
 
 
@@ -640,6 +700,11 @@ def _select_candidates(
             sig = row.get("buy_signal")
             if pd.notnull(sig) and sig:
                 candidates.append({"stock": stock, "score": float(row.get("brick_score", 0))})
+
+        elif strategy == "green_rebound":
+            sig = row.get("buy_signal")
+            if pd.notnull(sig) and sig:
+                candidates.append({"stock": stock, "score": float(row.get("green_score", 0))})
 
         elif strategy == "small_bank":
             # small_bank 自带板块过滤（北交所/科创/创业等已在顶层过滤，此处保留兜底）
@@ -789,7 +854,7 @@ async def select_stocks_async(
             "name": stock_names.get(code, code),
             "close": round(float(row.get("close", 0)), 2),
             "pct_chg": round(float(pct_val), 2),
-            "score": round(float(row.get("brick_score", 0)) if strategy == "brick" else 0, 2),
+            "score": round(float(row.get("brick_score", 0)) if strategy == "brick" else (float(row.get("green_score", 0)) if strategy == "green_rebound" else 0), 2),
             "signal": "买入",
             "industry": str(row.get("industry", "")),
             "region": str(row.get("region", ""))

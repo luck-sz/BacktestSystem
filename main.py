@@ -405,14 +405,30 @@ async def api_stock_kline(stock_code: str):
         df["ma5"] = df["close"].rolling(window=5).mean()
         df["ma60"] = df["close"].rolling(window=60).mean()
         
+        # Brick 砖型指标计算
+        hhv4   = df["high"].rolling(4).max()
+        llv4   = df["low"].rolling(4).min()
+        diff4  = (hhv4 - llv4).clip(lower=0.001)
+
+        import numpy as np
+        var1a  = (hhv4 - df["close"]) / diff4 * 100 - 90
+        var2a  = var1a.ewm(alpha=1 / 4, adjust=False).mean() + 100
+        var3a  = (df["close"] - llv4) / diff4 * 100
+        var4a  = var3a.ewm(alpha=1 / 6, adjust=False).mean()
+        var5a  = var4a.ewm(alpha=1 / 6, adjust=False).mean() + 100
+
+        v6a         = (var5a - var2a).fillna(0)
+        df["brick"] = np.where(v6a > 4, v6a - 4, 0.0)
+        df["prev_brick"] = df["brick"].shift(1).fillna(0)
+        
         # 2. 截取最近的 300 条
         df = df.tail(300)
         
         # 3. 填充计算初期产生的空值
         df = df.fillna(0)
         
-        # 转换为列表 [date, open, close, low, high, volume, k, d, j, ma5, ma60]
-        chart_data = df[["date", "open", "close", "low", "high", "volume", "k", "d", "j", "ma5", "ma60"]].values.tolist()
+        # 转换为列表 [date, open, close, low, high, volume, k, d, j, ma5, ma60, brick, prev_brick]
+        chart_data = df[["date", "open", "close", "low", "high", "volume", "k", "d", "j", "ma5", "ma60", "brick", "prev_brick"]].values.tolist()
         
         if df.empty:
             return {"code": stock_code, "name": stock_code, "data": []}
