@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 from concurrent.futures import ProcessPoolExecutor
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, Optional
 
 import numpy as np
 import pandas as pd
@@ -42,7 +42,7 @@ MIN_ROWS = 25  # 数据行数过少则跳过
 
 # ─────────────────────── 指标计算 ───────────────────────
 
-def _calc_rsv(df: pd.DataFrame, exclude_boards: list[str] = None) -> pd.DataFrame:
+def _calc_rsv(df: pd.DataFrame, exclude_boards: Optional[list[str]] = None) -> pd.DataFrame:
     """RSV背离策略指标"""
     low21   = df["low"].rolling(21, min_periods=1).min()
     high21  = df["close"].rolling(21, min_periods=1).max()
@@ -56,36 +56,29 @@ def _calc_rsv(df: pd.DataFrame, exclude_boards: list[str] = None) -> pd.DataFram
     return df
 
 
-def _calc_brick(df: pd.DataFrame, exclude_boards: list[str] = None) -> pd.DataFrame:
+def _calc_brick(df: pd.DataFrame, exclude_boards: Optional[list[str]] = None) -> pd.DataFrame:
     """砖型图打分策略指标（通达信风格近似）"""
     exclude_boards = exclude_boards or []
     ma_short = 5
-    ma_long = 60
     below_days = 5
-    callback_depth = 1.0
+    explosive_power = 1.0
     kdj_limit = 0.0
     
     for item in exclude_boards:
         if item.startswith("brick_ma_short:"):
             try: ma_short = int(item.split(":")[1])
             except: pass
-        elif item.startswith("brick_ma_long:"):
-            try: ma_long = int(item.split(":")[1])
-            except: pass
         elif item.startswith("brick_below_days:"):
             try: below_days = int(item.split(":")[1])
             except: pass
-        elif item.startswith("brick_callback:"):
-            try: callback_depth = float(item.split(":")[1])
+        elif item.startswith("brick_power:"):
+            try: explosive_power = float(item.split(":")[1])
             except: pass
         elif item.startswith("brick_kdj_limit:"):
             try: kdj_limit = float(item.split(":")[1])
             except: pass
             
-    callback_mult = 1.0 - callback_depth / 100.0
-
     df["ma5"] = df["close"].rolling(ma_short).mean()
-    df["ma60"] = df["close"].rolling(ma_long).mean()
 
     low9  = df["low"].rolling(9).min()
     high9 = df["high"].rolling(9).max()
@@ -111,26 +104,32 @@ def _calc_brick(df: pd.DataFrame, exclude_boards: list[str] = None) -> pd.DataFr
     b0 = df["brick"]
     b1 = df["brick"].shift(1)
     b2 = df["brick"].shift(2)
-
-    # color_ok: 要求指标出现 V 型反向，且回调深度超过 x%
-    color_ok    = (b1 < b2) & (b0 > b1) & (b1 < b2 * callback_mult)
-    trend_ok    = df["close"] > df["ma60"]
-    oversold_ok = df["j"].shift(1).rolling(5).min() < kdj_limit
+    
+    # 使用长度来判断爆发力，对齐通达信视觉效果
     red_len     = b0 - b1
     green_len   = b2 - b1
-    length_ok   = red_len > green_len
+    
+    # color_ok: 要求指标出现 V 型反向
+    color_ok    = (b1 < b2) & (b0 > b1)
+    # power_ok: T日红柱长度绝对值需大于绿柱的 1 倍 (或其他特定比例)
+    power_ok    = red_len > (green_len * explosive_power)
+    
+    oversold_ok = df["j"].shift(1).rolling(5).min() < kdj_limit
     
     # 排除今天，最近 N 日的收盘价都比短期均线低
     is_below_ma5 = df["close"] < df["ma5"]
     below_ma5_5days = is_below_ma5.shift(1).rolling(below_days).sum() == below_days
 
+    # 信号触发：今日必须收盘站上 MA5 (完成反转确认)
+    is_breakout = df["close"] > df["ma5"]
+
     df["brick_score"] = red_len / (green_len + 0.001)
-    df["buy_signal"]  = color_ok & trend_ok & oversold_ok & length_ok & below_ma5_5days
+    df["buy_signal"]  = color_ok & power_ok & oversold_ok & below_ma5_5days & is_breakout
     return df
 
 
 
-def _calc_small_bank(df: pd.DataFrame, exclude_boards: list[str] = None) -> pd.DataFrame:
+def _calc_small_bank(df: pd.DataFrame, exclude_boards: Optional[list[str]] = None) -> pd.DataFrame:
     """小市值+银行轮动混合策略指标"""
     df["turnover"] = df["close"] * df["volume"]
     df["avg_turnover20"] = df["turnover"].rolling(20, min_periods=1).mean()
@@ -142,7 +141,7 @@ def _calc_small_bank(df: pd.DataFrame, exclude_boards: list[str] = None) -> pd.D
     return df
 
 
-def _calc_green_rebound(df: pd.DataFrame, exclude_boards: list[str] = None) -> pd.DataFrame:
+def _calc_green_rebound(df: pd.DataFrame, exclude_boards: Optional[list[str]] = None) -> pd.DataFrame:
     """绿柱极限缩水反弹策略指标 (基于砖型指标动能减速)"""
     # 1. 砖型指标核心公式
     hhv4 = df["high"].rolling(4).max()
@@ -182,9 +181,9 @@ def _calc_green_rebound(df: pd.DataFrame, exclude_boards: list[str] = None) -> p
     # 区域 B: KDJ 超跌拐头 (J值向上且处于水下)
     j_ok = (j_0 > j_1) & (j_1 < 0)
     
-    # 区域 C: 趋势保护 (收盘价需站上60日均线)
+    # 区域 C: 趋势保护 (要求收盘价大于 60 日均线)
     ma60 = df["close"].rolling(60).mean()
-    trend_ok = df["close"] > ma60
+    trend_ok = (df["close"] > ma60)
     
     df["buy_signal"] = is_falling & is_decelerating & j_ok & trend_ok
     
@@ -192,6 +191,8 @@ def _calc_green_rebound(df: pd.DataFrame, exclude_boards: list[str] = None) -> p
     df["green_score"] = 1.0 / (drop_len_0 + 1e-6)
     
     return df
+
+
 
 _INDICATOR_FUNCS = {
     "rsv":   _calc_rsv,
@@ -705,6 +706,7 @@ def _select_candidates(
             sig = row.get("buy_signal")
             if pd.notnull(sig) and sig:
                 candidates.append({"stock": stock, "score": float(row.get("green_score", 0))})
+
 
         elif strategy == "small_bank":
             # small_bank 自带板块过滤（北交所/科创/创业等已在顶层过滤，此处保留兜底）

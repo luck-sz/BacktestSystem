@@ -132,14 +132,6 @@
                             </div>
                         </div>
                         <div class="flex items-center justify-between text-xs">
-                            <label class="text-slate-600 font-bold">长期均线天数</label>
-                            <div class="flex items-center gap-1">
-                                <input type="number" id="brick-ma-long" value="60" min="20" max="250"
-                                    class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none">
-                                <span class="text-slate-400">日</span>
-                            </div>
-                        </div>
-                        <div class="flex items-center justify-between text-xs">
                             <label class="text-slate-600 font-bold">低于短均线天数</label>
                             <div class="flex items-center gap-1">
                                 <input type="number" id="brick-below-days" value="5" min="1" max="20"
@@ -148,11 +140,11 @@
                             </div>
                         </div>
                         <div class="flex items-center justify-between text-xs">
-                            <label class="text-slate-600 font-bold">要求回调深度</label>
+                            <label class="text-slate-600 font-bold">爆发力</label>
                             <div class="flex items-center gap-1">
-                                <input type="number" id="brick-callback" value="1.0" min="0" max="20" step="0.5"
+                                <input type="number" id="brick-power" value="1.0" min="0" max="20" step="0.5"
                                     class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none">
-                                <span class="text-slate-400">%</span>
+                                <span class="text-slate-400">倍</span>
                             </div>
                         </div>
                         <div class="flex items-center justify-between text-xs">
@@ -888,16 +880,14 @@
                 let finalExcludeStr = excludeStr;
                 if (strategy === 'brick') {
                     const maShort = document.getElementById('brick-ma-short').value || 5;
-                    const maLong = document.getElementById('brick-ma-long').value || 60;
                     const belowDays = document.getElementById('brick-below-days').value || 5;
-                    const callback = document.getElementById('brick-callback').value || 1.0;
+                    const explosivePower = document.getElementById('brick-power').value || 1.0;
                     const kdjLimit = document.getElementById('brick-kdj-limit').value || 0.0;
 
                     const brickParams = [
                         `brick_ma_short:${maShort}`,
-                        `brick_ma_long:${maLong}`,
                         `brick_below_days:${belowDays}`,
-                        `brick_callback:${callback}`,
+                        `brick_power:${explosivePower}`,
                         `brick_kdj_limit:${kdjLimit}`
                     ].join(',');
                     finalExcludeStr = finalExcludeStr ? `${finalExcludeStr},${brickParams}` : brickParams;
