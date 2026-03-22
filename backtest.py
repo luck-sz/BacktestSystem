@@ -11,10 +11,14 @@ from __future__ import annotations
 import asyncio
 import os
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
 
 import numpy as np
 import pandas as pd
+
+from columnar_store import resolve_stock_files
+from factor_store import get_factor_path
 
 # ─────────────────────── 常量 ───────────────────────
 RENAME_MAP = {
@@ -32,90 +36,247 @@ RENAME_MAP = {
 }
 
 STRATEGY_NAMES = {
-    "rsv":   "RSV超卖",
+    "rsv": "RSV超卖",
     "brick": "超跌反弹",
     "small_bank": "小市值",
     "green_rebound": "绿柱缩短",
 }
 
 MIN_ROWS = 25  # 数据行数过少则跳过
+CACHE_DIRNAME = ".frame_cache"
+CACHE_VERSION = 1
+NUMERIC_COLUMNS = ("open", "high", "low", "close", "volume", "pct_chg", "prev_close")
+LOAD_BATCH_SIZE = 400
+MAP_CHUNK_SIZE = 8
+POOL_WORKERS = max(1, min(os.cpu_count() or 1, 8))
+
+
+def _cache_path_for(file_path: str) -> Path:
+    src = Path(file_path)
+    data_root = next(
+        (parent for parent in src.parents if parent.name == "all_stock_data"), None
+    )
+    if data_root is None:
+        return src.with_suffix(".pkl")
+    return data_root / CACHE_DIRNAME / src.relative_to(data_root).with_suffix(".pkl")
+
+
+def _read_cached_stock_frame(file_path: str) -> pd.DataFrame:
+    src = Path(file_path)
+    stat = src.stat()
+    signature = {
+        "version": CACHE_VERSION,
+        "mtime_ns": stat.st_mtime_ns,
+        "size": stat.st_size,
+    }
+    cache_path = _cache_path_for(file_path)
+
+    if cache_path.exists():
+        try:
+            payload = pd.read_pickle(cache_path)
+            if payload.get("meta") == signature and isinstance(
+                payload.get("data"), pd.DataFrame
+            ):
+                return payload["data"].copy()
+        except Exception:
+            pass
+
+    if src.suffix.lower() == ".parquet":
+        df = pd.read_parquet(file_path)
+        if df.empty:
+            return df
+        if "date" in df.columns and not pd.api.types.is_datetime64_any_dtype(
+            df["date"]
+        ):
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    else:
+        df = pd.read_csv(file_path, usecols=lambda c: c in RENAME_MAP)
+        if df.empty:
+            return df
+
+        df.rename(columns=RENAME_MAP, inplace=True)
+
+        if "date" not in df.columns:
+            return pd.DataFrame()
+
+        raw_date = pd.to_numeric(df["date"], errors="coerce")
+        df = df[raw_date.notna()].copy()
+        if df.empty:
+            return df
+
+        df["date"] = pd.to_datetime(
+            raw_date.loc[df.index].astype("int64").astype(str),
+            format="%Y%m%d",
+            errors="coerce",
+        )
+
+    df.dropna(subset=["date"], inplace=True)
+
+    for col in NUMERIC_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
+
+    for col in ("name", "industry", "region"):
+        if col in df.columns:
+            df[col] = df[col].astype("string")
+
+    df.sort_values("date", inplace=True)
+    df.drop_duplicates(subset=["date"], keep="last", inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        pd.to_pickle({"meta": signature, "data": df}, cache_path)
+    except Exception:
+        pass
+
+    return df.copy()
+
+
+def _read_factor_frame(file_path: str) -> pd.DataFrame | None:
+    src = Path(file_path)
+    data_root = next(
+        (parent for parent in src.parents if parent.name == "all_stock_data"), None
+    )
+    if data_root is None:
+        return None
+
+    factor_path = get_factor_path(str(src), str(data_root))
+    if not factor_path:
+        return None
+
+    try:
+        return pd.read_parquet(factor_path)
+    except Exception:
+        return None
+
+
+def _has_custom_brick_params(exclude_boards: list[str] | None) -> bool:
+    return any(item.startswith("brick_") for item in (exclude_boards or []))
+
+
+def _apply_precomputed_factors(
+    df: pd.DataFrame,
+    file_path: str,
+    strategy: str,
+    exclude_boards: list[str] | None = None,
+) -> pd.DataFrame | None:
+    if strategy == "brick":
+        return None
+
+    factors = _read_factor_frame(file_path)
+    if factors is None or factors.empty:
+        return None
+
+    merged = df.merge(factors, on="date", how="left", copy=False)
+
+    if strategy == "rsv":
+        return merged
+    if strategy == "small_bank":
+        if "prev_close" not in merged.columns:
+            merged["prev_close"] = merged.get("prev_close_calc")
+        return merged
+    if strategy == "green_rebound":
+        merged["buy_signal"] = merged.get("green_buy_signal", False)
+        return merged
+    return None
+
+
+def _map_batch_parallel(
+    executor: ProcessPoolExecutor, batch: list[tuple]
+) -> list[tuple]:
+    return list(executor.map(_load_single_file, batch, chunksize=MAP_CHUNK_SIZE))
+
 
 # ─────────────────────── 指标计算 ───────────────────────
 
-def _calc_rsv(df: pd.DataFrame, exclude_boards: Optional[list[str]] = None) -> pd.DataFrame:
-    """RSV背离策略指标"""
-    low21   = df["low"].rolling(21, min_periods=1).min()
-    high21  = df["close"].rolling(21, min_periods=1).max()
-    df["rsv_long"]  = (df["close"] - low21)  / (high21 - low21  + 1e-9) * 100
 
-    low3    = df["low"].rolling(3, min_periods=1).min()
-    high3   = df["close"].rolling(3, min_periods=1).max()
-    df["rsv_short"] = (df["close"] - low3)   / (high3  - low3   + 1e-9) * 100
+def _calc_rsv(
+    df: pd.DataFrame, exclude_boards: Optional[list[str]] = None
+) -> pd.DataFrame:
+    """RSV背离策略指标"""
+    low21 = df["low"].rolling(21, min_periods=1).min()
+    high21 = df["close"].rolling(21, min_periods=1).max()
+    df["rsv_long"] = (df["close"] - low21) / (high21 - low21 + 1e-9) * 100
+
+    low3 = df["low"].rolling(3, min_periods=1).min()
+    high3 = df["close"].rolling(3, min_periods=1).max()
+    df["rsv_short"] = (df["close"] - low3) / (high3 - low3 + 1e-9) * 100
 
     df["vol_ratio"] = df["volume"] / df["volume"].shift(1).replace(0, np.nan)
     return df
 
 
-def _calc_brick(df: pd.DataFrame, exclude_boards: Optional[list[str]] = None) -> pd.DataFrame:
+def _calc_brick(
+    df: pd.DataFrame, exclude_boards: Optional[list[str]] = None
+) -> pd.DataFrame:
     """砖型图打分策略指标（通达信风格近似）"""
     exclude_boards = exclude_boards or []
     ma_short = 5
     below_days = 5
     explosive_power = 1.0
     kdj_limit = 0.0
-    
+
     for item in exclude_boards:
         if item.startswith("brick_ma_short:"):
-            try: ma_short = int(item.split(":")[1])
-            except: pass
+            try:
+                ma_short = int(item.split(":")[1])
+            except:
+                pass
         elif item.startswith("brick_below_days:"):
-            try: below_days = int(item.split(":")[1])
-            except: pass
+            try:
+                below_days = int(item.split(":")[1])
+            except:
+                pass
         elif item.startswith("brick_power:"):
-            try: explosive_power = float(item.split(":")[1])
-            except: pass
+            try:
+                explosive_power = float(item.split(":")[1])
+            except:
+                pass
         elif item.startswith("brick_kdj_limit:"):
-            try: kdj_limit = float(item.split(":")[1])
-            except: pass
-            
+            try:
+                kdj_limit = float(item.split(":")[1])
+            except:
+                pass
+
     df["ma5"] = df["close"].rolling(ma_short).mean()
 
-    low9  = df["low"].rolling(9).min()
+    low9 = df["low"].rolling(9).min()
     high9 = df["high"].rolling(9).max()
     diff9 = (high9 - low9).clip(lower=0.001)
-    rsv   = (df["close"] - low9) / diff9 * 100
-    k     = rsv.ewm(alpha=1 / 3, adjust=False).mean()
-    d     = k.ewm(alpha=1 / 3, adjust=False).mean()
+    rsv = (df["close"] - low9) / diff9 * 100
+    k = rsv.ewm(alpha=1 / 3, adjust=False).mean()
+    d = k.ewm(alpha=1 / 3, adjust=False).mean()
     df["j"] = 3 * k - 2 * d
 
-    hhv4   = df["high"].rolling(4).max()
-    llv4   = df["low"].rolling(4).min()
-    diff4  = (hhv4 - llv4).clip(lower=0.001)
+    hhv4 = df["high"].rolling(4).max()
+    llv4 = df["low"].rolling(4).min()
+    diff4 = (hhv4 - llv4).clip(lower=0.001)
 
-    var1a  = (hhv4 - df["close"]) / diff4 * 100 - 90
-    var2a  = var1a.ewm(alpha=1 / 4, adjust=False).mean() + 100
-    var3a  = (df["close"] - llv4) / diff4 * 100
-    var4a  = var3a.ewm(alpha=1 / 6, adjust=False).mean()
-    var5a  = var4a.ewm(alpha=1 / 6, adjust=False).mean() + 100
+    var1a = (hhv4 - df["close"]) / diff4 * 100 - 90
+    var2a = var1a.ewm(alpha=1 / 4, adjust=False).mean() + 100
+    var3a = (df["close"] - llv4) / diff4 * 100
+    var4a = var3a.ewm(alpha=1 / 6, adjust=False).mean()
+    var5a = var4a.ewm(alpha=1 / 6, adjust=False).mean() + 100
 
-    v6a         = (var5a - var2a).fillna(0)
+    v6a = (var5a - var2a).fillna(0)
     df["brick"] = np.where(v6a > 4, v6a - 4, 0.0)
 
     b0 = df["brick"]
     b1 = df["brick"].shift(1)
     b2 = df["brick"].shift(2)
-    
+
     # 使用长度来判断爆发力，对齐通达信视觉效果
-    red_len     = b0 - b1
-    green_len   = b2 - b1
-    
+    red_len = b0 - b1
+    green_len = b2 - b1
+
     # color_ok: 要求指标出现 V 型反向
-    color_ok    = (b1 < b2) & (b0 > b1)
+    color_ok = (b1 < b2) & (b0 > b1)
     # power_ok: T日红柱长度绝对值需大于绿柱的 1 倍 (或其他特定比例)
-    power_ok    = red_len > (green_len * explosive_power)
-    
+    power_ok = red_len > (green_len * explosive_power)
+
     oversold_ok = df["j"].shift(1).rolling(5).min() < kdj_limit
-    
+
     # 排除今天，最近 N 日的收盘价都比短期均线低
     is_below_ma5 = df["close"] < df["ma5"]
     below_ma5_5days = is_below_ma5.shift(1).rolling(below_days).sum() == below_days
@@ -124,12 +285,13 @@ def _calc_brick(df: pd.DataFrame, exclude_boards: Optional[list[str]] = None) ->
     is_breakout = df["close"] > df["ma5"]
 
     df["brick_score"] = red_len / (green_len + 0.001)
-    df["buy_signal"]  = color_ok & power_ok & oversold_ok & below_ma5_5days & is_breakout
+    df["buy_signal"] = color_ok & power_ok & oversold_ok & below_ma5_5days & is_breakout
     return df
 
 
-
-def _calc_small_bank(df: pd.DataFrame, exclude_boards: Optional[list[str]] = None) -> pd.DataFrame:
+def _calc_small_bank(
+    df: pd.DataFrame, exclude_boards: Optional[list[str]] = None
+) -> pd.DataFrame:
     """小市值+银行轮动混合策略指标"""
     df["turnover"] = df["close"] * df["volume"]
     df["avg_turnover20"] = df["turnover"].rolling(20, min_periods=1).mean()
@@ -141,35 +303,37 @@ def _calc_small_bank(df: pd.DataFrame, exclude_boards: Optional[list[str]] = Non
     return df
 
 
-def _calc_green_rebound(df: pd.DataFrame, exclude_boards: Optional[list[str]] = None) -> pd.DataFrame:
+def _calc_green_rebound(
+    df: pd.DataFrame, exclude_boards: Optional[list[str]] = None
+) -> pd.DataFrame:
     """绿柱极限缩水反弹策略指标 (基于砖型指标动能减速)"""
     # 1. 砖型指标核心公式
     hhv4 = df["high"].rolling(4).max()
     llv4 = df["low"].rolling(4).min()
     diff4 = (hhv4 - llv4).clip(lower=0.001)
-    
+
     var1a = (hhv4 - df["close"]) / diff4 * 100 - 90
-    var2a = var1a.ewm(alpha=1/4, adjust=False).mean() + 100
+    var2a = var1a.ewm(alpha=1 / 4, adjust=False).mean() + 100
     var3a = (df["close"] - llv4) / diff4 * 100
-    var4a = var3a.ewm(alpha=1/6, adjust=False).mean()
-    var5a = var4a.ewm(alpha=1/6, adjust=False).mean() + 100
+    var4a = var3a.ewm(alpha=1 / 6, adjust=False).mean()
+    var5a = var4a.ewm(alpha=1 / 6, adjust=False).mean() + 100
     v6a = var5a - var2a
-    
+
     # 2. 动量砖计算 (严格遵循用户源码 IF(VAR6A>4,VAR6A-4,0))
     m0 = np.where(v6a > 4, v6a - 4, 0.0)
     m1 = pd.Series(m0).shift(1).values
     m2 = pd.Series(m0).shift(2).values
-    
+
     # 3. KDJ 计算 (9, 3, 3)
-    low9  = df["low"].rolling(9).min()
+    low9 = df["low"].rolling(9).min()
     high9 = df["high"].rolling(9).max()
     diff9 = (high9 - low9).clip(lower=0.001)
-    rsv   = (df["close"] - low9) / diff9 * 100
-    k     = rsv.ewm(alpha=1/3, adjust=False).mean()
-    d     = k.ewm(alpha=1/3, adjust=False).mean()
-    j     = 3 * k - 2 * d
-    j_0   = j
-    j_1   = j.shift(1)
+    rsv = (df["close"] - low9) / diff9 * 100
+    k = rsv.ewm(alpha=1 / 3, adjust=False).mean()
+    d = k.ewm(alpha=1 / 3, adjust=False).mean()
+    j = 3 * k - 2 * d
+    j_0 = j
+    j_1 = j.shift(1)
 
     # 4. 选股逻辑：
     # 区域 A: 砖型动能收缩
@@ -177,35 +341,41 @@ def _calc_green_rebound(df: pd.DataFrame, exclude_boards: Optional[list[str]] = 
     drop_len_1 = m2 - m1
     is_falling = drop_len_0 > 0
     is_decelerating = drop_len_0 < drop_len_1
-    
+
     # 区域 B: KDJ 超跌拐头 (J值向上且处于水下)
     j_ok = (j_0 > j_1) & (j_1 < 0)
-    
+
     # 区域 C: 趋势保护 (要求收盘价大于 60 日均线)
     ma60 = df["close"].rolling(60).mean()
-    trend_ok = (df["close"] > ma60)
-    
+    trend_ok = df["close"] > ma60
+
     df["buy_signal"] = is_falling & is_decelerating & j_ok & trend_ok
-    
+
     # 5. 得分逻辑：长度（下落幅度）越接近于 0，得分越高
     df["green_score"] = 1.0 / (drop_len_0 + 1e-6)
-    
+
     return df
 
 
-
 _INDICATOR_FUNCS = {
-    "rsv":   _calc_rsv,
+    "rsv": _calc_rsv,
     "brick": _calc_brick,
     "small_bank": _calc_small_bank,
     "green_rebound": _calc_green_rebound,
 }
 
+
 def _is_bank_period(dt: pd.Timestamp) -> bool:
-    mmdd = dt.strftime('%m-%d')
-    return ('12-15' <= mmdd <= '12-31') or ('01-01' <= mmdd <= '01-30') or ('04-04' <= mmdd <= '04-28')
+    mmdd = dt.strftime("%m-%d")
+    return (
+        ("12-15" <= mmdd <= "12-31")
+        or ("01-01" <= mmdd <= "01-30")
+        or ("04-04" <= mmdd <= "04-28")
+    )
+
 
 # ─────────────────────── 单文件加载（同步，用于 executor） ───────────────────────
+
 
 def _load_single_file(args: tuple) -> tuple[str, str, pd.DataFrame | None]:
     """
@@ -213,51 +383,40 @@ def _load_single_file(args: tuple) -> tuple[str, str, pd.DataFrame | None]:
     返回 (stock_code, stock_name, df_or_None)
     """
     file_path, strategy, start_ts, end_ts, exclude_boards = args
-    stock_code = os.path.basename(file_path).replace(".csv", "")
-    calc_fn    = _INDICATOR_FUNCS.get(strategy)
+    stock_code = Path(file_path).stem[:6]
+    calc_fn = _INDICATOR_FUNCS.get(strategy)
     if calc_fn is None:
         return stock_code, "", None
 
     try:
-        df = pd.read_csv(file_path, usecols=lambda c: c in RENAME_MAP)
+        df = _read_cached_stock_frame(file_path)
         if df.empty or len(df) < MIN_ROWS:
             return stock_code, "", None
 
-        df.rename(columns=RENAME_MAP, inplace=True)
-        stock_name = str(df["name"].iloc[0]) if "name" in df.columns else stock_code
+        stock_name = str(df["name"].iloc[-1]) if "name" in df.columns else stock_code
 
-        # 检查是否由于名字带 ST/退 等情况被排除
         if exclude_boards and "st" in exclude_boards:
             name_upper = stock_name.upper()
             if "ST" in name_upper or "退" in name_upper:
                 return stock_code, stock_name, None
 
-        # 记录全历史交易日数（在截取前），用于次新股过滤
         total_trading_days = len(df)
 
-        # ====== 核心性能优化：预先过滤无关历史数据 ======
-        # 预留 500 天(自然日)作为指标滚动（如MA120, EWM）预热空间
-        warmup_days = pd.Timedelta(days=500)
-        min_date_int = int((start_ts - warmup_days).strftime("%Y%m%d"))
-        
-        # 将原始 date 列作为数字快速剔除远古数据，大幅减少随后 to_datetime 及指标计算的耗时
-        df["_date_num"] = pd.to_numeric(df["date"], errors="coerce")
-        df = df[df["_date_num"] >= min_date_int].copy()
-        df.drop(columns=["_date_num"], inplace=True)
+        warmup_start = start_ts - pd.Timedelta(days=500)
+        df = df[df["date"] >= warmup_start].copy()
 
         if df.empty or len(df) < MIN_ROWS:
             return stock_code, stock_name, None
 
-        df["date"] = pd.to_datetime(df["date"].astype(str), format="%Y%m%d", errors="coerce")
-        df.dropna(subset=["date"], inplace=True)
-        df.sort_values("date", inplace=True)
-        df.drop_duplicates(subset=["date"], keep="last", inplace=True)  # 防止重复日期导致 loc 返回 DataFrame
-        df.reset_index(drop=True, inplace=True)
-
-        # 修复指标需要的 days_listed (保留其在全量数据中的近似绝对序号)
         df["days_listed"] = total_trading_days - len(df) + np.arange(len(df))
 
-        df = calc_fn(df, exclude_boards)
+        precomputed_df = _apply_precomputed_factors(
+            df, file_path, strategy, exclude_boards
+        )
+        if precomputed_df is not None:
+            df = precomputed_df
+        else:
+            df = calc_fn(df, exclude_boards)
 
         # 必须在计算指标之后再做精确的日期截取，保证滚动窗口完整且最终输出期间精准
         df = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)]
@@ -268,7 +427,7 @@ def _load_single_file(args: tuple) -> tuple[str, str, pd.DataFrame | None]:
         df["total_trading_days"] = total_trading_days
 
         df.set_index("date", inplace=True)
-        return stock_code, stock_name, df.reset_index().to_dict("list")
+        return stock_code, stock_name, df
 
     except Exception:
         return stock_code, "", None
@@ -280,14 +439,14 @@ LogCallback = Callable[[str, Any], Coroutine]
 
 
 async def run_backtest_async(
-    data_dir:        str,
-    log_callback:    LogCallback,
-    start_date:      str   = "2026-01-02",
-    end_date:        str   = "2026-02-27",
-    strategy:        str   = "rsv",
+    data_dir: str,
+    log_callback: LogCallback,
+    start_date: str = "2026-01-02",
+    end_date: str = "2026-02-27",
+    strategy: str = "rsv",
     initial_capital: float = 100_000.0,
-    max_positions:   int   = 2,
-    exclude_boards:  list[str] = None
+    max_positions: int = 2,
+    exclude_boards: list[str] = None,
 ) -> dict | None:
     """
     异步横截面回测主函数。
@@ -303,81 +462,83 @@ async def run_backtest_async(
     max_positions   : 最大持仓数量（只）
     """
     strategy_label = STRATEGY_NAMES.get(strategy, strategy)
-    await log_callback("INFO", f"=== [策略启动] {strategy_label} ({start_date} 到 {end_date}) ===")
+    await log_callback(
+        "INFO", f"=== [策略启动] {strategy_label} ({start_date} 到 {end_date}) ==="
+    )
 
-    # ── 1. 扫描 CSV 文件列表 ──
-    csv_files: list[str] = []
-    
+    # ── 1. 扫描数据文件列表 ──
     exclude_boards = exclude_boards or []
-    
-    for root, _, files in os.walk(data_dir):
-        if "大盘" in root:
+    candidate_files = resolve_stock_files(data_dir, prefer_parquet=False)
+    csv_files: list[str] = []
+    for file_path in candidate_files:
+        code = Path(file_path).stem[:6]
+        if "kc" in exclude_boards and code.startswith("688"):
             continue
-        for f in files:
-            if f.endswith(".csv") and f[:6].isdigit():
-                code = f[:6]
-                # 板块过滤（在文件扫描阶段快速排除，减少 I/O）
-                if "kc"  in exclude_boards and code.startswith("688"):
-                    continue
-                if "cy"  in exclude_boards and (code.startswith("300") or code.startswith("301")):
-                    continue
-                if "bse" in exclude_boards and (code.startswith("4") or code.startswith("8")):
-                    continue
-                # ST/退市 通过名字过滤，在 _load_single_file 内处理
-                csv_files.append(os.path.join(root, f))
+        if "cy" in exclude_boards and (
+            code.startswith("300") or code.startswith("301")
+        ):
+            continue
+        if "bse" in exclude_boards and (
+            code.startswith("4") or code.startswith("8") or code.startswith("9")
+        ):
+            continue
+        csv_files.append(file_path)
 
     if not csv_files:
         await log_callback("WARN", f"数据目录中未找到任何 CSV 文件：{data_dir}")
         return None
 
     total_files = len(csv_files)
-    await log_callback("INFO", f"开始加载数据: 共发现 {total_files} 只个股数据，准备全市场回测...")
+    await log_callback(
+        "INFO", f"开始加载数据: 共发现 {total_files} 只个股数据，准备全市场回测..."
+    )
 
     start_ts = pd.Timestamp(start_date)
-    end_ts   = pd.Timestamp(end_date)
+    end_ts = pd.Timestamp(end_date)
     args_list = [(fp, strategy, start_ts, end_ts, exclude_boards) for fp in csv_files]
 
     # ── 2. 并发预加载 & 指标计算（使用进程池避免 GIL） ──
-    stock_data:  dict[str, pd.DataFrame] = {}
-    stock_names: dict[str, str]          = {}
-    all_dates:   set                     = set()
+    stock_data: dict[str, pd.DataFrame] = {}
+    stock_names: dict[str, str] = {}
+    all_dates: set = set()
 
-    loop = asyncio.get_event_loop()
-    BATCH = 200  # 每批处理数量，兼顾内存与进度反馈
+    batch_size = LOAD_BATCH_SIZE
 
-    with ProcessPoolExecutor() as executor:
-        for batch_start in range(0, total_files, BATCH):
-            batch = args_list[batch_start: batch_start + BATCH]
-            results = await loop.run_in_executor(
-                executor,
-                _batch_load,
-                batch,
-            )
-            for code, name, df_dict in results:
-                if df_dict is not None:
-                    df = pd.DataFrame(df_dict)
-                    df.set_index("date", inplace=True)
-                    stock_data[code]  = df
+    with ProcessPoolExecutor(max_workers=POOL_WORKERS) as executor:
+        for batch_start in range(0, total_files, batch_size):
+            batch = args_list[batch_start : batch_start + batch_size]
+            results = await asyncio.to_thread(_map_batch_parallel, executor, batch)
+            for code, name, df_data in results:
+                if df_data is not None:
+                    stock_data[code] = df_data
                     stock_names[code] = name
-                    all_dates.update(df.index)
+                    all_dates.update(df_data.index)
 
-            loaded = min(batch_start + BATCH, total_files)
-            await log_callback("DEBUG", f"仍在处理中: 已预加载并计算指标 {loaded}/{total_files} 只股票...")
+            loaded = min(batch_start + batch_size, total_files)
+            await log_callback(
+                "DEBUG",
+                f"仍在处理中: 已预加载并计算指标 {loaded}/{total_files} 只股票...",
+            )
             await asyncio.sleep(0)  # 让事件循环有机会推送 SSE
 
     sorted_dates = sorted(all_dates)
     if not sorted_dates:
-        await log_callback("WARN", "在指定的日期范围内没有可用数据，请检查数据目录或日期范围。")
+        await log_callback(
+            "WARN", "在指定的日期范围内没有可用数据，请检查数据目录或日期范围。"
+        )
         return None
 
-    await log_callback("INFO", f"数据加载完毕，共 {len(stock_data)} 只股票参与回测，回测日历 {len(sorted_dates)} 个交易日。")
+    await log_callback(
+        "INFO",
+        f"数据加载完毕，共 {len(stock_data)} 只股票参与回测，回测日历 {len(sorted_dates)} 个交易日。",
+    )
     await log_callback("INFO", "开始进行日级别横截面撮合与仿真...")
 
     # ── 3. 逐日撮合 ──
-    trades:               list[dict] = []
-    held_stocks:          dict[str, dict] = {}
-    buy_list:             list[str] = []
-    daily_equity_curve:   dict[str, float] = {}
+    trades: list[dict] = []
+    held_stocks: dict[str, dict] = {}
+    buy_list: list[str] = []
+    daily_equity_curve: dict[str, float] = {}
     partial_equity_updates: dict[str, float] = {}
     current_equity = 1.0
 
@@ -387,7 +548,10 @@ async def run_backtest_async(
         date_str = current_date.strftime("%Y-%m-%d")
 
         if i % 10 == 0:
-            await log_callback("DEBUG", f"回测进行中: 正在撮合 {date_str} 的交易 ({i}/{total_days} 天)...")
+            await log_callback(
+                "DEBUG",
+                f"回测进行中: 正在撮合 {date_str} 的交易 ({i}/{total_days} 天)...",
+            )
             await asyncio.sleep(0)
 
         # ── 3a. 开盘买入 ──
@@ -415,15 +579,15 @@ async def run_backtest_async(
             if np.isnan(open_price) or open_price <= 0:
                 continue
 
-            pos_value   = (initial_capital * current_equity) / max_positions
-            shares      = max(int(pos_value / (open_price * 100)) * 100, 100)
+            pos_value = (initial_capital * current_equity) / max_positions
+            shares = max(int(pos_value / (open_price * 100)) * 100, 100)
             actual_cost = shares * open_price
 
             held_stocks[stock] = {
-                "buy_date":   current_date,
-                "buy_price":  open_price,
-                "start_idx":  i,
-                "shares":     shares,
+                "buy_date": current_date,
+                "buy_price": open_price,
+                "start_idx": i,
+                "shares": shares,
                 "buy_amount": actual_cost,
             }
             bought_today.append(stock)
@@ -432,7 +596,7 @@ async def run_backtest_async(
 
         # ── 3b. 当日净值更新 ──
         daily_ret_sum = 0.0
-        n_positions   = len(held_stocks)
+        n_positions = len(held_stocks)
 
         for stock, info in held_stocks.items():
             df = stock_data.get(stock)
@@ -445,7 +609,11 @@ async def run_backtest_async(
                 prev_date = sorted_dates[i - 1]
                 if prev_date in df.index:
                     prev_close = float(df.loc[prev_date, "close"])
-                    ret = (curr_close - prev_close) / prev_close if prev_close > 0 else 0.0
+                    ret = (
+                        (curr_close - prev_close) / prev_close
+                        if prev_close > 0
+                        else 0.0
+                    )
                 else:
                     ret = 0.0
             else:
@@ -454,10 +622,10 @@ async def run_backtest_async(
 
         # 用实际持仓数量做分母（若空仓则分母为 max_positions 保证基准稳定）
         divisor = n_positions if n_positions > 0 else max_positions
-        current_equity *= (1 + daily_ret_sum / divisor)
+        current_equity *= 1 + daily_ret_sum / divisor
 
         rounded_eq = round((current_equity - 1) * 100, 4)
-        daily_equity_curve[date_str]    = rounded_eq
+        daily_equity_curve[date_str] = rounded_eq
         partial_equity_updates[date_str] = rounded_eq
 
         if len(partial_equity_updates) >= 20 or i == total_days - 1:
@@ -470,14 +638,14 @@ async def run_backtest_async(
         bank_stocks = ["601988", "601398", "601288"]
         if strategy == "small_bank":
             is_bp = _is_bank_period(current_date)
-            
+
         for stock, info in held_stocks.items():
             df = stock_data.get(stock)
             if df is None or current_date not in df.index:
                 continue
 
             sell_price = float(df.loc[current_date, "close"])
-            hold_days  = i - info["start_idx"]
+            hold_days = i - info["start_idx"]
             profit_pct = (sell_price - info["buy_price"]) / info["buy_price"] * 100
 
             sell_reason = None
@@ -492,7 +660,7 @@ async def run_backtest_async(
                         sell_reason = "个股止损触发(跌幅>-9%)"
                     elif hold_days > 0 and i > 0:
                         # 放量抛售
-                        prev_dt = sorted_dates[i-1]
+                        prev_dt = sorted_dates[i - 1]
                         if prev_dt in df.index:
                             max_vol = float(df.loc[prev_dt, "max_vol120"])
                             curr_vol = float(df.loc[current_date, "volume"])
@@ -503,11 +671,17 @@ async def run_backtest_async(
             elif strategy == "brick":
                 if hold_days >= 1:
                     close_p = float(df.loc[current_date, "close"])
-                    ma_short = float(df.loc[current_date, "ma5"]) if "ma5" in df.columns else 0.0
-                    
+                    ma_short = (
+                        float(df.loc[current_date, "ma5"])
+                        if "ma5" in df.columns
+                        else 0.0
+                    )
+
                     if ma_short > 0 and close_p < ma_short:
                         sell_price = close_p
-                        profit_pct = (sell_price - info["buy_price"]) / info["buy_price"] * 100
+                        profit_pct = (
+                            (sell_price - info["buy_price"]) / info["buy_price"] * 100
+                        )
                         sell_reason = "尾盘跌破短期均线(5日线)卖出"
             else:
                 sell_reason = _judge_sell(strategy, hold_days, profit_pct)
@@ -515,14 +689,14 @@ async def run_backtest_async(
                     sell_reason = "持仓满5天兜底强制清仓"
             if sell_reason:
                 trade_data = {
-                    "代码":     stock,
-                    "名称":     stock_names.get(stock, stock),
+                    "代码": stock,
+                    "名称": stock_names.get(stock, stock),
                     "买入日期": info["buy_date"].strftime("%Y-%m-%d"),
-                    "买入价":   round(info["buy_price"], 2),
+                    "买入价": round(info["buy_price"], 2),
                     "购买股数": info.get("shares", 0),
                     "购买金额": round(info.get("buy_amount", 0), 2),
                     "卖出日期": date_str,
-                    "卖出价":   round(sell_price, 2),
+                    "卖出价": round(sell_price, 2),
                     "持仓天数": max(hold_days, 1),
                     "收益率(%)": round(profit_pct, 2),
                 }
@@ -537,7 +711,11 @@ async def run_backtest_async(
         available_slots = max_positions - len(held_stocks)
         if available_slots > 0:
             buy_list = _select_candidates(
-                strategy, stock_data, held_stocks, current_date, available_slots,
+                strategy,
+                stock_data,
+                held_stocks,
+                current_date,
+                available_slots,
                 exclude_boards,
             )
 
@@ -545,35 +723,41 @@ async def run_backtest_async(
     await log_callback("INFO", "=== 回测结束，正在汇总统计报告 ===")
 
     if not trades:
-        await log_callback("WARN", "没有产生任何有效交易，请检查策略参数或扩大回测时间范围。")
+        await log_callback(
+            "WARN", "没有产生任何有效交易，请检查策略参数或扩大回测时间范围。"
+        )
         return None
 
-    trades_df   = pd.DataFrame(trades)
+    trades_df = pd.DataFrame(trades)
     total_trades = len(trades_df)
-    win_trades  = int((trades_df["收益率(%)"] > 0).sum())
+    win_trades = int((trades_df["收益率(%)"] > 0).sum())
     loss_trades = total_trades - win_trades
-    win_rate    = win_trades / total_trades * 100
-    avg_profit  = float(trades_df["收益率(%)"].mean())
-    max_profit  = float(trades_df["收益率(%)"].max())
-    max_loss    = float(trades_df["收益率(%)"].min())
+    win_rate = win_trades / total_trades * 100
+    avg_profit = float(trades_df["收益率(%)"].mean())
+    max_profit = float(trades_df["收益率(%)"].max())
+    max_loss = float(trades_df["收益率(%)"].min())
 
-    await log_callback("INFO", f"总交易次数: {total_trades} 次 | 胜率: {win_rate:.2f}% | 平均收益: {avg_profit:.2f}%")
+    await log_callback(
+        "INFO",
+        f"总交易次数: {total_trades} 次 | 胜率: {win_rate:.2f}% | 平均收益: {avg_profit:.2f}%",
+    )
 
     return {
         "initial_capital": initial_capital,
-        "final_capital":   round(initial_capital * current_equity, 2),
-        "total_trades":    total_trades,
-        "win_trades":      win_trades,
-        "loss_trades":     loss_trades,
-        "win_rate":        round(win_rate, 2),
-        "avg_profit":      round(avg_profit, 2),
-        "max_profit":      round(max_profit, 2),
-        "max_loss":        round(max_loss, 2),
-        "daily_equity":    daily_equity_curve,
+        "final_capital": round(initial_capital * current_equity, 2),
+        "total_trades": total_trades,
+        "win_trades": win_trades,
+        "loss_trades": loss_trades,
+        "win_rate": round(win_rate, 2),
+        "avg_profit": round(avg_profit, 2),
+        "max_profit": round(max_profit, 2),
+        "max_loss": round(max_loss, 2),
+        "daily_equity": daily_equity_curve,
     }
 
 
 # ─────────────────────── 辅助函数 ───────────────────────
+
 
 def _batch_load(args_list: list[tuple]) -> list[tuple]:
     """进程池调用的批量加载入口（必须是顶层函数）"""
@@ -596,9 +780,9 @@ def _judge_sell(strategy: str, hold_days: int, profit_pct: float) -> str | None:
 
 
 def _select_candidates(
-    strategy:       str,
-    stock_data:     dict[str, pd.DataFrame],
-    held_stocks:    dict[str, dict],
+    strategy: str,
+    stock_data: dict[str, pd.DataFrame],
+    held_stocks: dict[str, dict],
     current_date,
     available_slots: int,
     exclude_boards: list[str] | None = None,
@@ -607,32 +791,44 @@ def _select_candidates(
     exclude_boards = exclude_boards or []
 
     # ── 解析带参数的过滤条件 ──
-    new_min_days     = None
-    lowprice_limit   = None
-    highprice_limit  = None
-    lowvol_limit     = None   # 万元
-    mktcap_min_limit = None   # 亿元
-    mktcap_max_limit = None   # 亿元
+    new_min_days = None
+    lowprice_limit = None
+    highprice_limit = None
+    lowvol_limit = None  # 万元
+    mktcap_min_limit = None  # 亿元
+    mktcap_max_limit = None  # 亿元
 
     for item in exclude_boards:
         if item.startswith("new:"):
-            try: new_min_days = int(item.split(":")[1])
-            except: new_min_days = 365
+            try:
+                new_min_days = int(item.split(":")[1])
+            except:
+                new_min_days = 365
         elif item.startswith("lowprice:"):
-            try: lowprice_limit = float(item.split(":")[1])
-            except: lowprice_limit = 3.0
+            try:
+                lowprice_limit = float(item.split(":")[1])
+            except:
+                lowprice_limit = 3.0
         elif item.startswith("highprice:"):
-            try: highprice_limit = float(item.split(":")[1])
-            except: highprice_limit = 200.0
+            try:
+                highprice_limit = float(item.split(":")[1])
+            except:
+                highprice_limit = 200.0
         elif item.startswith("lowvol:"):
-            try: lowvol_limit = float(item.split(":")[1]) * 10000  # 万元转元
-            except: lowvol_limit = 2000 * 10000
+            try:
+                lowvol_limit = float(item.split(":")[1]) * 10000  # 万元转元
+            except:
+                lowvol_limit = 2000 * 10000
         elif item.startswith("mktcap_min:"):
-            try: mktcap_min_limit = float(item.split(":")[1])
-            except: mktcap_min_limit = 20.0
+            try:
+                mktcap_min_limit = float(item.split(":")[1])
+            except:
+                mktcap_min_limit = 20.0
         elif item.startswith("mktcap_max:"):
-            try: mktcap_max_limit = float(item.split(":")[1])
-            except: mktcap_max_limit = 200.0
+            try:
+                mktcap_max_limit = float(item.split(":")[1])
+            except:
+                mktcap_max_limit = 200.0
 
     filter_suspended = "suspended" in exclude_boards
 
@@ -667,13 +863,13 @@ def _select_candidates(
             close = row.get("close", 0)
             if pd.notnull(close) and float(close) > highprice_limit:
                 continue
-        
+
         # 获取日均成交额用于流动性和市值过滤
         avg_t = row.get("avg_turnover20")
         if avg_t is None:
             close = float(row.get("close", 0) or 0)
-            vol   = float(row.get("volume", 0) or 0)
-            avg_t = close * vol # 估算
+            vol = float(row.get("volume", 0) or 0)
+            avg_t = close * vol  # 估算
 
         # 低流动性过滤（日均成交额)
         if lowvol_limit is not None:
@@ -692,7 +888,9 @@ def _select_candidates(
 
         # ── 策略专属选股逻辑 ──
         if strategy == "rsv":
-            rl = row.get("rsv_long");  rs = row.get("rsv_short"); vr = row.get("vol_ratio")
+            rl = row.get("rsv_long")
+            rs = row.get("rsv_short")
+            vr = row.get("vol_ratio")
             if pd.notnull(rl) and pd.notnull(rs) and pd.notnull(vr):
                 if rl >= 80 and rs <= 20 and vr > 0:
                     candidates.append({"stock": stock, "score": float(vr)})
@@ -700,13 +898,16 @@ def _select_candidates(
         elif strategy == "brick":
             sig = row.get("buy_signal")
             if pd.notnull(sig) and sig:
-                candidates.append({"stock": stock, "score": float(row.get("brick_score", 0))})
+                candidates.append(
+                    {"stock": stock, "score": float(row.get("brick_score", 0))}
+                )
 
         elif strategy == "green_rebound":
             sig = row.get("buy_signal")
             if pd.notnull(sig) and sig:
-                candidates.append({"stock": stock, "score": float(row.get("green_score", 0))})
-
+                candidates.append(
+                    {"stock": stock, "score": float(row.get("green_score", 0))}
+                )
 
         elif strategy == "small_bank":
             # small_bank 自带板块过滤（北交所/科创/创业等已在顶层过滤，此处保留兜底）
@@ -734,14 +935,17 @@ def _select_candidates(
                             bank_cands.append({"stock": b, "score": ratio})
             if bank_cands:
                 bank_cands.sort(key=lambda x: x["score"])
-                if len(bank_cands) > 1 and (bank_cands[-1]["score"] - bank_cands[0]["score"] > 0.005):
+                if len(bank_cands) > 1 and (
+                    bank_cands[-1]["score"] - bank_cands[0]["score"] > 0.005
+                ):
                     return [bank_cands[0]["stock"]]
                 else:
                     holding_bank = [s for s in held_stocks if s in bank_stocks]
                     return holding_bank if holding_bank else [bank_cands[0]["stock"]]
             return []
         else:
-            if not candidates: return []
+            if not candidates:
+                return []
             candidates.sort(key=lambda x: x["score"])
             return [c["stock"] for c in candidates[:available_slots]]
 
@@ -761,17 +965,17 @@ def _select_candidates(
         return [c["stock"] for c in candidates[:available_slots]]
 
 
-
 async def select_stocks_async(
-    data_dir:       str,
-    target_date:    str,
-    strategy:       str = "brick",
+    data_dir: str,
+    target_date: str,
+    strategy: str = "brick",
     exclude_boards: list[str] = None,
-    log_callback:   LogCallback = None
+    log_callback: LogCallback = None,
 ) -> list[dict]:
     """
     每日选股入口：根据指定日期，筛选出符合策略信号的公开股票。
     """
+
     async def log(level: str, msg: Any):
         if log_callback:
             await log_callback(level, msg)
@@ -779,19 +983,27 @@ async def select_stocks_async(
     target_ts = pd.Timestamp(target_date)
     exclude_boards = exclude_boards or []
 
-    await log("INFO", f"开始处理 {target_date} 的选股任务，策略：{strategy}，排除板块：{exclude_boards}...")
+    await log(
+        "INFO",
+        f"开始处理 {target_date} 的选股任务，策略：{strategy}，排除板块：{exclude_boards}...",
+    )
 
     # 1. 扫描文件
+    candidate_files = resolve_stock_files(data_dir, prefer_parquet=False)
     csv_files: list[str] = []
-    for root, _, files in os.walk(data_dir):
-        if "大盘" in root: continue
-        for f in files:
-            if f.endswith(".csv") and f[:6].isdigit():
-                code = f[:6]
-                if "kc" in exclude_boards and code.startswith("688"): continue
-                if "cy" in exclude_boards and (code.startswith("300") or code.startswith("301")): continue
-                if "bse" in exclude_boards and (code.startswith("4") or code.startswith("8") or code.startswith("9")): continue
-                csv_files.append(os.path.join(root, f))
+    for file_path in candidate_files:
+        code = Path(file_path).stem[:6]
+        if "kc" in exclude_boards and code.startswith("688"):
+            continue
+        if "cy" in exclude_boards and (
+            code.startswith("300") or code.startswith("301")
+        ):
+            continue
+        if "bse" in exclude_boards and (
+            code.startswith("4") or code.startswith("8") or code.startswith("9")
+        ):
+            continue
+        csv_files.append(file_path)
 
     if not csv_files:
         await log("WARN", "未找到有效的股票数据文件。")
@@ -801,27 +1013,26 @@ async def select_stocks_async(
     await log("INFO", f"共扫描到 {total_files} 只个股，准备计算技术指标...")
 
     # 2. 并发加载 & 计算指标
-    start_ts = target_ts - pd.Timedelta(days=120) 
-    args_list = [(fp, strategy, start_ts, target_ts, exclude_boards) for fp in csv_files]
+    start_ts = target_ts - pd.Timedelta(days=120)
+    args_list = [
+        (fp, strategy, start_ts, target_ts, exclude_boards) for fp in csv_files
+    ]
 
-    stock_data:  dict[str, pd.DataFrame] = {}
-    stock_names: dict[str, str]          = {}
+    stock_data: dict[str, pd.DataFrame] = {}
+    stock_names: dict[str, str] = {}
 
-    BATCH = 300
-    loop = asyncio.get_event_loop()
-    with ProcessPoolExecutor() as executor:
-        for batch_start in range(0, total_files, BATCH):
-            batch = args_list[batch_start: batch_start + BATCH]
-            results = await loop.run_in_executor(executor, _batch_load, batch)
-            
-            for code, name, df_dict in results:
-                if df_dict is not None:
-                    df = pd.DataFrame(df_dict)
-                    df.set_index("date", inplace=True)
-                    stock_data[code]  = df
+    batch_size = LOAD_BATCH_SIZE
+    with ProcessPoolExecutor(max_workers=POOL_WORKERS) as executor:
+        for batch_start in range(0, total_files, batch_size):
+            batch = args_list[batch_start : batch_start + batch_size]
+            results = await asyncio.to_thread(_map_batch_parallel, executor, batch)
+
+            for code, name, df_data in results:
+                if df_data is not None:
+                    stock_data[code] = df_data
                     stock_names[code] = name
-            
-            loaded = min(batch_start + BATCH, total_files)
+
+            loaded = min(batch_start + batch_size, total_files)
             progress = int(loaded / total_files * 100)
             await log("DEBUG", f"指标计算进度: {loaded}/{total_files} ({progress}%)")
             await asyncio.sleep(0)
@@ -830,8 +1041,12 @@ async def select_stocks_async(
 
     # 3. 选股筛选
     selected_codes = _select_candidates(
-        strategy, stock_data, {}, target_ts, available_slots=100,
-        exclude_boards=exclude_boards
+        strategy,
+        stock_data,
+        {},
+        target_ts,
+        available_slots=100,
+        exclude_boards=exclude_boards,
     )
 
     # 4. 封装结果
@@ -843,30 +1058,42 @@ async def select_stocks_async(
         row = df.loc[target_ts]
         # 获取涨跌幅（优先取 pct_chg 列，若无则尝试动态计算）
         pct_val = row.get("pct_chg")
-        if pd.isna(pct_val) or pct_val == 0 or pct_val == '':
+        if pd.isna(pct_val) or pct_val == 0 or pct_val == "":
             close_p = float(row.get("close", 0))
             prev_p = float(row.get("prev_close", 0))
             if prev_p > 0:
                 pct_val = (close_p / prev_p - 1) * 100
             else:
                 pct_val = 0
-        
-        final_results.append({
-            "code": code,
-            "name": stock_names.get(code, code),
-            "close": round(float(row.get("close", 0)), 2),
-            "pct_chg": round(float(pct_val), 2),
-            "score": round(float(row.get("brick_score", 0)) if strategy == "brick" else (float(row.get("green_score", 0)) if strategy == "green_rebound" else 0), 2),
-            "signal": "买入",
-            "industry": str(row.get("industry", "")),
-            "region": str(row.get("region", ""))
-        })
+
+        final_results.append(
+            {
+                "code": code,
+                "name": stock_names.get(code, code),
+                "close": round(float(row.get("close", 0)), 2),
+                "pct_chg": round(float(pct_val), 2),
+                "score": round(
+                    float(row.get("brick_score", 0))
+                    if strategy == "brick"
+                    else (
+                        float(row.get("green_score", 0))
+                        if strategy == "green_rebound"
+                        else 0
+                    ),
+                    2,
+                ),
+                "signal": "买入",
+                "industry": str(row.get("industry", "")),
+                "region": str(row.get("region", "")),
+            }
+        )
 
     await log("INFO", f"选股任务结束，共筛选出 {len(final_results)} 只符合条件的个股。")
     return final_results
 
 
 # ─────────────────────── CLI 入口 ───────────────────────
+
 
 def run_backtest(data_dir: str) -> None:
     asyncio.run(_run_backtest_wrapper(data_dir))
@@ -875,6 +1102,7 @@ def run_backtest(data_dir: str) -> None:
 async def _run_backtest_wrapper(data_dir: str) -> None:
     async def print_callback(level: str, msg: Any) -> None:
         print(f"[{level}] {msg}")
+
     await run_backtest_async(data_dir, print_callback)
 
 

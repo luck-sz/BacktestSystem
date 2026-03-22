@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import itertools
 import json
 import os
 import uuid
@@ -27,21 +28,122 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from backtest import run_backtest_async, select_stocks_async, STRATEGY_NAMES
+from columnar_store import get_stock_source_path, sync_parquet_store
+from factor_store import sync_factor_store
+from result_cache import (
+    backtest_cache_key,
+    generic_cache_key,
+    load_cached_payload,
+    save_cached_payload,
+    selection_cache_key,
+)
 
 app = FastAPI(title="A股回测分析工作台", version="1.0.0")
 
 # ── 常量 ──────────────────────────────────────────────────
-BASE_DIR    = os.path.dirname(__file__)
+BASE_DIR = os.path.dirname(__file__)
 HISTORY_DIR = os.path.join(BASE_DIR, "backtest_history")
 os.makedirs(HISTORY_DIR, exist_ok=True)
 
 # ── 全局状态 ──────────────────────────────────────────────
-_is_running   = False   # 防止并发重复提交
+_is_running = False  # 防止并发重复提交
 _last_selection_results = {}
 _last_result = {"trades": [], "stats": {}}
+_last_sweep_results = {}
+
+
+def _normalize_cache_list(values: list[str]) -> list[str]:
+    return sorted(dict.fromkeys(values))
+
+
+def _normalize_exclude_value(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return _normalize_cache_list([x.strip() for x in value.split(",") if x.strip()])
+    if isinstance(value, list):
+        return _normalize_cache_list([str(x).strip() for x in value if str(x).strip()])
+    return _normalize_cache_list([str(value).strip()])
+
+
+def _expand_parameter_grid(
+    base_params: dict[str, Any], grid: dict[str, list[Any]]
+) -> list[dict[str, Any]]:
+    if not grid:
+        return [dict(base_params)]
+
+    keys = list(grid.keys())
+    value_lists = [grid[key] for key in keys]
+    combos = []
+    for values in itertools.product(*value_lists):
+        combo = dict(base_params)
+        for key, value in zip(keys, values):
+            combo[key] = value
+        if "exclude_boards" in combo:
+            combo["exclude_boards"] = _normalize_exclude_value(combo["exclude_boards"])
+        combos.append(combo)
+    return combos
+
+
+async def _run_backtest_with_cache(
+    *,
+    data_dir: str,
+    start_date: str,
+    end_date: str,
+    strategy: str,
+    initial_capital: float,
+    max_positions: int,
+    exclude_boards: list[str],
+    log_callback,
+) -> tuple[dict | None, list[dict], bool, dict[str, Any], str]:
+    cache_params = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "strategy": strategy,
+        "max_positions": max_positions,
+        "initial_capital": initial_capital,
+        "exclude_boards": _normalize_cache_list(exclude_boards),
+    }
+    cache_key = backtest_cache_key(BASE_DIR, data_dir, cache_params)
+    cached = load_cached_payload(BASE_DIR, "backtest", cache_key)
+    if cached:
+        return (
+            cached.get("stats") or {},
+            list(cached.get("trades") or []),
+            True,
+            cache_params,
+            cache_key,
+        )
+
+    trades: list[dict] = []
+
+    async def wrapped_log(level: str, message: Any) -> None:
+        if level == "TRADE_RECORD":
+            trades.append(message)
+        await log_callback(level, message)
+
+    result = await run_backtest_async(
+        data_dir,
+        wrapped_log,
+        start_date,
+        end_date,
+        strategy,
+        initial_capital,
+        max_positions,
+        exclude_boards,
+    )
+    if result:
+        save_cached_payload(
+            BASE_DIR,
+            "backtest",
+            cache_key,
+            {"stats": result, "trades": trades, "params": cache_params},
+        )
+    return result, trades, False, cache_params, cache_key
 
 
 # ── 历史记录工具函数 ──────────────────────────────────────
+
 
 def _save_history(
     history_id: str,
@@ -65,18 +167,18 @@ def _save_history(
         period_days = 0
 
     payload = {
-        "id":              history_id,
-        "strategy":        strategy,
-        "strategy_name":   STRATEGY_NAMES.get(strategy, strategy),
-        "created_at":      created_at,
-        "start_date":      start_date,
-        "end_date":        end_date,
-        "period_days":     period_days,
-        "max_positions":   max_positions,
+        "id": history_id,
+        "strategy": strategy,
+        "strategy_name": STRATEGY_NAMES.get(strategy, strategy),
+        "created_at": created_at,
+        "start_date": start_date,
+        "end_date": end_date,
+        "period_days": period_days,
+        "max_positions": max_positions,
         "initial_capital": initial_capital,
-        "exclude_boards":  exclude_boards,
-        "stats":           result,
-        "trades":          trades,
+        "exclude_boards": exclude_boards,
+        "stats": result,
+        "trades": trades,
     }
     path = os.path.join(HISTORY_DIR, f"{history_id}.json")
     with open(path, "w", encoding="utf-8") as f:
@@ -95,30 +197,36 @@ def _list_history() -> list[dict]:
                 data = json.load(f)
             # 只返回摘要字段，不含 trades（减少传输量）
             stats = data.get("stats", {})
-            records.append({
-                "id":              data.get("id"),
-                "strategy":        data.get("strategy"),
-                "strategy_name":   data.get("strategy_name"),
-                "created_at":      data.get("created_at"),
-                "start_date":      data.get("start_date"),
-                "end_date":        data.get("end_date"),
-                "period_days":     data.get("period_days"),
-                "max_positions":   data.get("max_positions"),
-                "initial_capital": data.get("initial_capital"),
-                "exclude_boards":  data.get("exclude_boards", []),
-                "total_trades":    stats.get("total_trades", 0),
-                "win_rate":        stats.get("win_rate", 0),
-                "avg_profit":      stats.get("avg_profit", 0),
-                "max_profit":      stats.get("max_profit", 0),
-                "max_loss":        stats.get("max_loss", 0),
-                "final_capital":   stats.get("final_capital", 0),
-                # 策略总收益率 = (final - initial) / initial * 100
-                "strategy_return": round(
-                    (stats.get("final_capital", data.get("initial_capital", 1))
-                     - data.get("initial_capital", 1))
-                    / max(data.get("initial_capital", 1), 1) * 100, 2
-                ),
-            })
+            records.append(
+                {
+                    "id": data.get("id"),
+                    "strategy": data.get("strategy"),
+                    "strategy_name": data.get("strategy_name"),
+                    "created_at": data.get("created_at"),
+                    "start_date": data.get("start_date"),
+                    "end_date": data.get("end_date"),
+                    "period_days": data.get("period_days"),
+                    "max_positions": data.get("max_positions"),
+                    "initial_capital": data.get("initial_capital"),
+                    "exclude_boards": data.get("exclude_boards", []),
+                    "total_trades": stats.get("total_trades", 0),
+                    "win_rate": stats.get("win_rate", 0),
+                    "avg_profit": stats.get("avg_profit", 0),
+                    "max_profit": stats.get("max_profit", 0),
+                    "max_loss": stats.get("max_loss", 0),
+                    "final_capital": stats.get("final_capital", 0),
+                    # 策略总收益率 = (final - initial) / initial * 100
+                    "strategy_return": round(
+                        (
+                            stats.get("final_capital", data.get("initial_capital", 1))
+                            - data.get("initial_capital", 1)
+                        )
+                        / max(data.get("initial_capital", 1), 1)
+                        * 100,
+                        2,
+                    ),
+                }
+            )
         except Exception:
             continue
     records.sort(key=lambda x: x.get("created_at", ""), reverse=True)
@@ -126,6 +234,7 @@ def _list_history() -> list[dict]:
 
 
 # ── 页面路由 ──────────────────────────────────────────────
+
 
 def _read_html(filename: str) -> str:
     path = os.path.join(BASE_DIR, filename)
@@ -154,6 +263,7 @@ async def select_page():
 
 
 # ── API 路由 ──────────────────────────────────────────────
+
 
 @app.get("/api/get_report_data")
 async def get_report_data():
@@ -196,13 +306,15 @@ async def start_backtest(request: Request):
     global _is_running
 
     if _is_running:
-        raise HTTPException(status_code=409, detail="当前已有回测任务正在运行，请稍后再试")
+        raise HTTPException(
+            status_code=409, detail="当前已有回测任务正在运行，请稍后再试"
+        )
 
     # ── 解析参数 ──
     p = request.query_params
     start_date = p.get("start_date", "2026-01-02")
-    end_date   = p.get("end_date",   "2026-02-27")
-    strategy   = p.get("strategy",   "rsv").lower()
+    end_date = p.get("end_date", "2026-02-27")
+    strategy = p.get("strategy", "rsv").lower()
 
     default_max = {"rsv": 2, "ma": 5, "brick": 10}
     try:
@@ -217,6 +329,16 @@ async def start_backtest(request: Request):
 
     exclude_boards_str = p.get("exclude", "")
     exclude_boards = [x.strip() for x in exclude_boards_str.split(",") if x.strip()]
+    data_dir = os.path.join(BASE_DIR, "all_stock_data")
+    cache_params = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "strategy": strategy,
+        "max_positions": max_positions,
+        "initial_capital": initial_capital,
+        "exclude_boards": _normalize_cache_list(exclude_boards),
+    }
+    cache_key = backtest_cache_key(BASE_DIR, data_dir, cache_params)
 
     # 为本次回测生成唯一 ID
     history_id = uuid.uuid4().hex
@@ -233,19 +355,67 @@ async def start_backtest(request: Request):
     async def backtest_task() -> None:
         global _is_running
         _is_running = True
-        data_dir = os.path.join(BASE_DIR, "all_stock_data")
         try:
             _last_result["trades"] = []
-            _last_result["stats"]  = {}
+            _last_result["stats"] = {}
+
+            cached = load_cached_payload(BASE_DIR, "backtest", cache_key)
+            if cached:
+                result = cached.get("stats") or {}
+                trades = list(cached.get("trades") or [])
+                _last_result["trades"] = trades
+                _last_result["stats"] = result
+                await queue.put(
+                    {
+                        "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                        "level": "INFO",
+                        "message": f"命中结果缓存：{strategy} {start_date} ~ {end_date}",
+                    }
+                )
+                _save_history(
+                    history_id=history_id,
+                    strategy=strategy,
+                    start_date=start_date,
+                    end_date=end_date,
+                    max_positions=max_positions,
+                    initial_capital=initial_capital,
+                    exclude_boards=exclude_boards,
+                    result=result,
+                    trades=trades,
+                )
+                await queue.put(
+                    {
+                        "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                        "level": "RESULT",
+                        "message": json.dumps(
+                            {**result, "history_id": history_id}, ensure_ascii=False
+                        ),
+                    }
+                )
+                return
 
             result = await run_backtest_async(
-                data_dir, log_callback,
-                start_date, end_date, strategy,
-                initial_capital, max_positions,
-                exclude_boards
+                data_dir,
+                log_callback,
+                start_date,
+                end_date,
+                strategy,
+                initial_capital,
+                max_positions,
+                exclude_boards,
             )
             if result:
                 _last_result["stats"] = result
+                save_cached_payload(
+                    BASE_DIR,
+                    "backtest",
+                    cache_key,
+                    {
+                        "stats": result,
+                        "trades": list(_last_result["trades"]),
+                        "params": cache_params,
+                    },
+                )
                 # ── 保存历史记录 ──
                 _save_history(
                     history_id=history_id,
@@ -258,17 +428,23 @@ async def start_backtest(request: Request):
                     result=result,
                     trades=list(_last_result["trades"]),
                 )
-                await queue.put({
-                    "time":    datetime.datetime.now().strftime("%H:%M:%S"),
-                    "level":   "RESULT",
-                    "message": json.dumps({**result, "history_id": history_id}, ensure_ascii=False),
-                })
+                await queue.put(
+                    {
+                        "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                        "level": "RESULT",
+                        "message": json.dumps(
+                            {**result, "history_id": history_id}, ensure_ascii=False
+                        ),
+                    }
+                )
         except Exception as exc:
-            await queue.put({
-                "time":    datetime.datetime.now().strftime("%H:%M:%S"),
-                "level":   "ERROR",
-                "message": f"回测引擎异常：{exc}",
-            })
+            await queue.put(
+                {
+                    "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                    "level": "ERROR",
+                    "message": f"回测引擎异常：{exc}",
+                }
+            )
         finally:
             _is_running = False
             await queue.put({"level": "DONE"})
@@ -292,7 +468,7 @@ async def start_backtest(request: Request):
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":    "no-cache",
+            "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
     )
@@ -304,6 +480,12 @@ async def api_select_stocks(request: Request):
     return JSONResponse(content=_last_selection_results)
 
 
+@app.get("/api/parameter_sweep")
+async def api_parameter_sweep():
+    """获取最后一次参数扫描结果。"""
+    return JSONResponse(content=_last_sweep_results)
+
+
 @app.get("/api/start_select_stocks")
 async def api_start_select_stocks(request: Request):
     """开启选股任务并推送进度 (SSE)。"""
@@ -312,22 +494,47 @@ async def api_start_select_stocks(request: Request):
     strategy = p.get("strategy", "brick").lower()
     exclude_boards_str = p.get("exclude", "")
     exclude_boards = [x.strip() for x in exclude_boards_str.split(",") if x.strip()]
+    data_dir = os.path.join(BASE_DIR, "all_stock_data")
+    cache_params = {
+        "date": target_date,
+        "strategy": strategy,
+        "exclude_boards": _normalize_cache_list(exclude_boards),
+    }
+    cache_key = selection_cache_key(BASE_DIR, data_dir, cache_params)
 
     async def event_generator():
         # 用于接收日志回调的对列
         queue = asyncio.Queue()
 
+        cached = load_cached_payload(BASE_DIR, "selection", cache_key)
+        if cached:
+            cached_payload = {
+                "date": target_date,
+                "strategy": strategy,
+                "count": len(cached.get("data") or []),
+                "data": list(cached.get("data") or []),
+                "status": "success",
+                "cache_hit": True,
+            }
+            _last_selection_results.clear()
+            _last_selection_results.update(cached_payload)
+            yield f"data: {json.dumps({'level': 'INFO', 'message': f'命中选股缓存：{strategy} {target_date}'}, ensure_ascii=False)}\n\n"
+            yield "data: DONE\n\n"
+            return
+
         async def log_cb(level: str, msg: Any):
             await queue.put({"level": level, "message": msg})
 
         # 在后台启动选股逻辑
-        select_task = asyncio.create_task(select_stocks_async(
-            os.path.join(BASE_DIR, "all_stock_data"),
-            target_date,
-            strategy,
-            exclude_boards,
-            log_cb
-        ))
+        select_task = asyncio.create_task(
+            select_stocks_async(
+                data_dir,
+                target_date,
+                strategy,
+                exclude_boards,
+                log_cb,
+            )
+        )
 
         while True:
             try:
@@ -342,13 +549,21 @@ async def api_start_select_stocks(request: Request):
                     results = await select_task
                     # 保存到全局状态供前端后续拉取
                     _last_selection_results.clear()
-                    _last_selection_results.update({
-                        "date": target_date,
-                        "strategy": strategy,
-                        "count": len(results),
-                        "data": results,
-                        "status": "success"
-                    })
+                    _last_selection_results.update(
+                        {
+                            "date": target_date,
+                            "strategy": strategy,
+                            "count": len(results),
+                            "data": results,
+                            "status": "success",
+                        }
+                    )
+                    save_cached_payload(
+                        BASE_DIR,
+                        "selection",
+                        cache_key,
+                        {"data": results, "params": cache_params},
+                    )
                     yield "data: DONE\n\n"
                 except Exception as e:
                     yield f"data: {json.dumps({'level': 'ERROR', 'message': f'选股异常: {str(e)}'}, ensure_ascii=False)}\n\n"
@@ -360,7 +575,182 @@ async def api_start_select_stocks(request: Request):
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":    "no-cache",
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/start_parameter_sweep")
+async def api_start_parameter_sweep(request: Request):
+    """批量参数扫描并通过 SSE 推送进度。"""
+    global _is_running
+
+    if _is_running:
+        raise HTTPException(status_code=409, detail="当前已有任务正在运行，请稍后再试")
+
+    p = request.query_params
+    start_date = p.get("start_date", "2026-01-02")
+    end_date = p.get("end_date", "2026-02-27")
+    strategy = p.get("strategy", "brick").lower()
+    data_dir = os.path.join(BASE_DIR, "all_stock_data")
+
+    try:
+        initial_capital = float(p.get("initial_capital", 100_000))
+    except (ValueError, TypeError):
+        initial_capital = 100_000.0
+
+    try:
+        max_positions = int(
+            p.get("max_positions", {"brick": 10, "rsv": 2}.get(strategy, 5))
+        )
+    except (ValueError, TypeError):
+        max_positions = {"brick": 10, "rsv": 2}.get(strategy, 5)
+
+    exclude_boards = _normalize_exclude_value(p.get("exclude", ""))
+    try:
+        top_n = int(p.get("top_n", 20))
+    except (ValueError, TypeError):
+        top_n = 20
+
+    grid_raw = p.get("grid", "")
+    try:
+        grid = json.loads(grid_raw) if grid_raw else {}
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"grid JSON 解析失败: {exc}")
+
+    if not isinstance(grid, dict):
+        raise HTTPException(status_code=400, detail="grid 必须是 JSON 对象")
+
+    normalized_grid: dict[str, list[Any]] = {}
+    for key, values in grid.items():
+        if not isinstance(values, list) or not values:
+            raise HTTPException(status_code=400, detail=f"grid.{key} 必须是非空数组")
+        normalized_grid[key] = values
+
+    base_params = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "strategy": strategy,
+        "initial_capital": initial_capital,
+        "max_positions": max_positions,
+        "exclude_boards": exclude_boards,
+    }
+    combinations = _expand_parameter_grid(base_params, normalized_grid)
+    sweep_params = {
+        "base_params": {
+            **base_params,
+            "exclude_boards": _normalize_cache_list(exclude_boards),
+        },
+        "grid": normalized_grid,
+        "top_n": top_n,
+        "count": len(combinations),
+    }
+    sweep_cache_key = generic_cache_key(
+        "parameter_sweep", BASE_DIR, data_dir, sweep_params
+    )
+
+    async def event_generator():
+        global _is_running
+        _is_running = True
+        try:
+            cached = load_cached_payload(BASE_DIR, "parameter_sweep", sweep_cache_key)
+            if cached:
+                _last_sweep_results.clear()
+                _last_sweep_results.update(cached)
+                yield f"data: {json.dumps({'level': 'INFO', 'message': f'命中参数扫描缓存：{strategy} x {len(combinations)} 组'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'level': 'RESULT', 'message': json.dumps(cached, ensure_ascii=False)}, ensure_ascii=False)}\n\n"
+                yield "data: DONE\n\n"
+                return
+
+            results = []
+            total = len(combinations)
+            for idx, combo in enumerate(combinations, start=1):
+                await asyncio.sleep(0)
+                await_msg = {
+                    "level": "INFO",
+                    "message": f"开始参数组合 {idx}/{total}: max_positions={combo.get('max_positions')} exclude={','.join(combo.get('exclude_boards', [])) or '-'}",
+                }
+                yield f"data: {json.dumps(await_msg, ensure_ascii=False)}\n\n"
+
+                async def silent_log(level: str, message: Any):
+                    return None
+
+                (
+                    result,
+                    trades,
+                    cache_hit,
+                    cache_params,
+                    _,
+                ) = await _run_backtest_with_cache(
+                    data_dir=data_dir,
+                    start_date=combo["start_date"],
+                    end_date=combo["end_date"],
+                    strategy=combo["strategy"],
+                    initial_capital=float(combo["initial_capital"]),
+                    max_positions=int(combo["max_positions"]),
+                    exclude_boards=_normalize_exclude_value(
+                        combo.get("exclude_boards", [])
+                    ),
+                    log_callback=silent_log,
+                )
+                if not result:
+                    continue
+
+                strategy_return = round(
+                    (
+                        result.get("final_capital", combo["initial_capital"])
+                        - combo["initial_capital"]
+                    )
+                    / max(combo["initial_capital"], 1)
+                    * 100,
+                    2,
+                )
+                results.append(
+                    {
+                        "params": cache_params,
+                        "cache_hit": cache_hit,
+                        "total_trades": result.get("total_trades", 0),
+                        "win_rate": result.get("win_rate", 0),
+                        "avg_profit": result.get("avg_profit", 0),
+                        "max_profit": result.get("max_profit", 0),
+                        "max_loss": result.get("max_loss", 0),
+                        "final_capital": result.get("final_capital", 0),
+                        "strategy_return": strategy_return,
+                        "trade_count": len(trades),
+                    }
+                )
+
+            results.sort(
+                key=lambda item: (
+                    item.get("strategy_return", -999999),
+                    item.get("win_rate", -1),
+                ),
+                reverse=True,
+            )
+            payload = {
+                "strategy": strategy,
+                "start_date": start_date,
+                "end_date": end_date,
+                "total_runs": len(combinations),
+                "completed_runs": len(results),
+                "top_n": top_n,
+                "grid": normalized_grid,
+                "results": results[:top_n],
+            }
+            save_cached_payload(BASE_DIR, "parameter_sweep", sweep_cache_key, payload)
+            _last_sweep_results.clear()
+            _last_sweep_results.update(payload)
+            yield f"data: {json.dumps({'level': 'RESULT', 'message': json.dumps(payload, ensure_ascii=False)}, ensure_ascii=False)}\n\n"
+            yield "data: DONE\n\n"
+        finally:
+            _is_running = False
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
     )
@@ -370,73 +760,84 @@ async def api_start_select_stocks(request: Request):
 async def api_stock_kline(stock_code: str):
     """获取指定股票的 K 线数据。"""
     data_dir = os.path.join(BASE_DIR, "all_stock_data")
-    target_file = None
-    
-    # 查找文件
-    for root, _, files in os.walk(data_dir):
-        if f"{stock_code}.csv" in files:
-            target_file = os.path.join(root, f"{stock_code}.csv")
-            break
-            
+    target_file = get_stock_source_path(data_dir, stock_code, prefer_parquet=True)
+
     if not target_file:
-        raise HTTPException(status_code=404, detail=f"未找到股票 {stock_code} 的数据文件")
-        
+        raise HTTPException(
+            status_code=404, detail=f"未找到股票 {stock_code} 的数据文件"
+        )
+
     try:
-        from backtest import RENAME_MAP
-        
-        # 读取最近 200 天的数据用于展示
-        df = pd.read_csv(target_file, usecols=lambda c: c in RENAME_MAP)
-        df.rename(columns=RENAME_MAP, inplace=True)
-        df["date"] = pd.to_datetime(df["date"].astype(str), format="%Y%m%d", errors="coerce").dt.strftime('%Y-%m-%d')
-        df.dropna(subset=["date"], inplace=True)
-        df.sort_values("date", inplace=True)
-        
-        # 1. 首先计算全量数据的指标，确保“预热”充足
+        from backtest import _read_cached_stock_frame
+
+        df = _read_cached_stock_frame(target_file).copy()
+        if df.empty:
+            return {"code": stock_code, "name": stock_code, "data": []}
+
+        df["date"] = df["date"].dt.strftime("%Y-%m-%d")
+
         low_9 = df["low"].rolling(window=9).min()
         high_9 = df["high"].rolling(window=9).max()
         rsv = (df["close"] - low_9) / (high_9 - low_9).replace(0, 1e-9) * 100
-        
+
         # KDJ 标准计算
         df["k"] = rsv.ewm(com=2, adjust=False).mean()
         df["d"] = df["k"].ewm(com=2, adjust=False).mean()
         df["j"] = 3 * df["k"] - 2 * df["d"]
-        
+
         # 均线计算
         df["ma5"] = df["close"].rolling(window=5).mean()
         df["ma60"] = df["close"].rolling(window=60).mean()
-        
+
         # Brick 砖型指标计算
-        hhv4   = df["high"].rolling(4).max()
-        llv4   = df["low"].rolling(4).min()
-        diff4  = (hhv4 - llv4).clip(lower=0.001)
+        hhv4 = df["high"].rolling(4).max()
+        llv4 = df["low"].rolling(4).min()
+        diff4 = (hhv4 - llv4).clip(lower=0.001)
 
         import numpy as np
-        var1a  = (hhv4 - df["close"]) / diff4 * 100 - 90
-        var2a  = var1a.ewm(alpha=1 / 4, adjust=False).mean() + 100
-        var3a  = (df["close"] - llv4) / diff4 * 100
-        var4a  = var3a.ewm(alpha=1 / 6, adjust=False).mean()
-        var5a  = var4a.ewm(alpha=1 / 6, adjust=False).mean() + 100
 
-        v6a         = (var5a - var2a).fillna(0)
+        var1a = (hhv4 - df["close"]) / diff4 * 100 - 90
+        var2a = var1a.ewm(alpha=1 / 4, adjust=False).mean() + 100
+        var3a = (df["close"] - llv4) / diff4 * 100
+        var4a = var3a.ewm(alpha=1 / 6, adjust=False).mean()
+        var5a = var4a.ewm(alpha=1 / 6, adjust=False).mean() + 100
+
+        v6a = (var5a - var2a).fillna(0)
         df["brick"] = np.where(v6a > 4, v6a - 4, 0.0)
         df["prev_brick"] = df["brick"].shift(1).fillna(0)
-        
+
         # 2. 截取最近的 300 条
         df = df.tail(300)
-        
+
         # 3. 填充计算初期产生的空值
         df = df.fillna(0)
-        
+
         # 转换为列表 [date, open, close, low, high, volume, k, d, j, ma5, ma60, brick, prev_brick]
-        chart_data = df[["date", "open", "close", "low", "high", "volume", "k", "d", "j", "ma5", "ma60", "brick", "prev_brick"]].values.tolist()
-        
+        chart_data = df[
+            [
+                "date",
+                "open",
+                "close",
+                "low",
+                "high",
+                "volume",
+                "k",
+                "d",
+                "j",
+                "ma5",
+                "ma60",
+                "brick",
+                "prev_brick",
+            ]
+        ].values.tolist()
+
         if df.empty:
             return {"code": stock_code, "name": stock_code, "data": []}
 
         return {
             "code": stock_code,
             "name": str(df["name"].iloc[0]) if "name" in df.columns else stock_code,
-            "data": chart_data
+            "data": chart_data,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"解析数据失败: {str(e)}")
@@ -444,23 +845,28 @@ async def api_stock_kline(stock_code: str):
 
 # ── API 自动更新与检查 ──────────────────────────────────────
 
+
 @app.get("/api/check_and_update")
 async def api_check_and_update():
     """检查股票数据是否为最新，如果不是则运行 append_tencent.py 并推送进度"""
     from datetime import datetime
     import re
-    
+
     now = datetime.now()
     target_date = now.strftime("%Y%m%d")
     data_dir = os.path.join(BASE_DIR, "all_stock_data")
     needs_update = False
-    
+
     # 检查是否为工作日的 8:30 到 15:10 之间
     is_trading_hours = False
     if now.weekday() < 5:  # 0-4 分别是周一到周五
-        if (now.hour == 8 and now.minute >= 30) or (9 <= now.hour <= 14) or (now.hour == 15 and now.minute <= 10):
+        if (
+            (now.hour == 8 and now.minute >= 30)
+            or (9 <= now.hour <= 14)
+            or (now.hour == 15 and now.minute <= 10)
+        ):
             is_trading_hours = True
-    
+
     lock_file = os.path.join(data_dir, ".update_lock")
     last_check_date = ""
     if os.path.exists(lock_file):
@@ -479,17 +885,17 @@ async def api_check_and_update():
             # 查找任意一个 csv 文件（可能在子目录下）
             for root, dirs, files in os.walk(data_dir):
                 for f in files:
-                    if f.endswith('.csv'):
+                    if f.endswith(".csv"):
                         sample_file = os.path.join(root, f)
                         break
                 if sample_file:
                     break
-                    
+
         if sample_file:
             try:
                 df = pd.read_csv(sample_file, nrows=1, dtype=str)
-                if not df.empty and '交易日期' in df.columns:
-                    last_date = str(df['交易日期'].iloc[0]).strip()
+                if not df.empty and "交易日期" in df.columns:
+                    last_date = str(df["交易日期"].iloc[0]).strip()
                     if last_date < target_date:
                         needs_update = True
             except:
@@ -501,16 +907,18 @@ async def api_check_and_update():
         if not needs_update:
             yield f"data: {json.dumps({'status': 'updated'})}\\n\\n"
             return
-            
+
         yield f"data: {json.dumps({'status': 'updating', 'progress': 0})}\\n\\n"
-        
+
         process = await asyncio.create_subprocess_exec(
-            sys.executable, "-u", "append_tencent.py",
+            sys.executable,
+            "-u",
+            "append_tencent.py",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=BASE_DIR
+            cwd=BASE_DIR,
         )
-        
+
         # tqdm 默认使用 \r 刷新，因此不能用 readline()
         async def read_until_cr_or_lf(stream):
             res = bytearray()
@@ -518,12 +926,13 @@ async def api_check_and_update():
                 chunk = await stream.read(1)
                 if not chunk:
                     break
-                if chunk in (b'\\r', b'\\n'):
+                if chunk in (b"\\r", b"\\n"):
                     break
                 res.extend(chunk)
-            return res.decode('utf-8', errors='ignore')
-            
+            return res.decode("utf-8", errors="ignore")
+
         import re
+
         while True:
             line = await read_until_cr_or_lf(process.stdout)
             if not line:
@@ -532,15 +941,21 @@ async def api_check_and_update():
                 else:
                     await asyncio.sleep(0.01)
                     continue
-            
+
             # 从 line 中解析类似 " 25%|" 的进度
-            match = re.search(r'(\\d+)%', line)
+            match = re.search(r"(\\d+)%", line)
             if match:
                 pct = int(match.group(1))
                 yield f"data: {json.dumps({'status': 'updating', 'progress': pct})}\\n\\n"
-                
+
         await process.wait()
-        
+
+        try:
+            sync_parquet_store(data_dir)
+            sync_factor_store(data_dir)
+        except Exception:
+            pass
+
         # 记录今天已经检查/更新过
         try:
             os.makedirs(data_dir, exist_ok=True)
@@ -548,7 +963,7 @@ async def api_check_and_update():
                 f.write(target_date)
         except:
             pass
-            
+
         yield f"data: {json.dumps({'status': 'done', 'progress': 100})}\\n\\n"
 
     return StreamingResponse(
@@ -565,4 +980,5 @@ async def api_check_and_update():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

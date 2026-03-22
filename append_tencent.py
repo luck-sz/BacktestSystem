@@ -203,34 +203,36 @@ def main():
     print(f"  Errors:  {error}")
 
     # 发送通知
-    send_server_chan(ok, skip, nodata, error)
+    send_telegram_msg(ok, skip, nodata, error)
 
-def send_server_chan(ok, skip, nodata, error):
-    # ── 请在这里填写您的 Server 酱 SendKey ──
-    # 或者通过环境变量命令行：export SC_SENDKEY=your_key
-    sc_key = os.environ.get('SC_SENDKEY', 'SCT267527T63O6p9A60O855O855O8') # 占位符供替换
-    if not sc_key or 'SCT' not in sc_key:
-        print("\n[SKIP] ServerChan Key 未设置，跳过发送消息。")
-        return
+def send_telegram_msg(ok, skip, nodata, error):
+    TG_TOKEN = '8633814338:AAF1N2sAHCY5-uyprjsszzTut0rnFgK1bjs'
+    TG_CHAT_ID = '6347039264'
 
-    title = f"📈 股票数据更新报告 ({FETCH_END})"
+    title = f"📈 *股票数据更新报告 ({FETCH_END})*"
     content = f"""
-### 更新任务已完成
+*任务详情:*
 - **成功**: {ok} 只 
 - **跳过**: {skip} 只
 - **无数据**: {nodata} 只
 - **失败**: {error} 只
 
-**状态：** {"✅ 全部执行完毕" if error == 0 else "⚠️ 部分更新存在错误"}
+*状态：* {"✅ 全部执行完毕" if error == 0 else "⚠️ 部分更新存在错误"}
     """
     
-    url = f"https://sctapi.ftqq.com/{sc_key}.send"
+    message = f"{title}\n{content}"
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    payload = {'chat_id': TG_CHAT_ID, 'text': message, 'parse_mode': 'Markdown'}
+
     try:
-        res = requests.post(url, data={"title": title, "desp": content}, timeout=10)
+        res = requests.post(url, json=payload, timeout=10)
         if res.status_code == 200:
-            print(f"\n[OK] Server酱通知发送成功！")
+            print(f"\n[OK] Telegram通知发送成功！")
         else:
-            print(f"\n[FAIL] Server酱发送失败: {res.text}")
+            print(f"\n[FAIL] Telegram发送失败: {res.text}")
+            import os, json
+            print("尝试使用 curl 兜底发送...")
+            os.system(f"curl -s -m 15 -X POST {url} -H 'Content-Type: application/json' -d '{json.dumps(payload)}' > /dev/null")
     except Exception as e:
         print(f"\n[ERROR] 发送通知异常: {e}")
 

@@ -26,3 +26,8 @@ backtest_history/
 
 # 日志文件
 profile*.txt
+.result_cache/
+*.log
+*.pid
+*.tmp
+*.bak_*
