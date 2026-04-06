@@ -70,6 +70,11 @@
             color: #b45309;
         }
 
+        .badge-annual94 {
+            background: #fee2e2;
+            color: #b91c1c;
+        }
+
         .badge-small_bank {
             background: #d1fae5;
             color: #065f46;
@@ -219,6 +224,7 @@
                         <option value="">全部策略</option>
                         <option value="rsv">RSV超卖</option>
                         <option value="brick">超跌反弹</option>
+                        <option value="annual94">年化94</option>
                         <option value="small_bank">小市值</option>
                     </select>
                 </div>
@@ -334,7 +340,7 @@
 
         // ─── 表格渲染 ────────────────────────────────────────────
         function badgeClass(strategy) {
-            const map = { rsv: 'badge-rsv', brick: 'badge-brick', small_bank: 'badge-small_bank' };
+            const map = { rsv: 'badge-rsv', brick: 'badge-brick', annual94: 'badge-annual94', small_bank: 'badge-small_bank' };
             return map[strategy] || 'badge-other';
         }
         function colorClass(val) {
@@ -376,6 +382,7 @@
                 const maxL = r.max_loss || 0;
                 const isChk = selectedIds.has(r.id);
                 const dtParts = (r.created_at || '').split('T');
+                const source = (r.meta && r.meta.source) || '';
 
                 html += `
                 <tr class="row-hover fade-in transition-colors" data-id="${r.id}" style="animation-delay:${idx * 0.03}s">
@@ -386,6 +393,7 @@
                     <td class="px-5 py-4 text-slate-400 font-mono text-xs">${records.length - idx}</td>
                     <td class="px-5 py-4">
                         <span class="badge ${badgeClass(r.strategy)}">${r.strategy_name || r.strategy}</span>
+                        ${source === 'parameter_sweep' ? '<div class="mt-2"><span class="inline-block rounded bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-600">参数扫描</span></div>' : ''}
                     </td>
                     <td class="px-5 py-4 text-xs text-slate-500 font-mono leading-relaxed">
                         ${dtParts[0] || '—'}<br/>

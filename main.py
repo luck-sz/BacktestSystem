@@ -35,10 +35,116 @@ from result_cache import (
     generic_cache_key,
     load_cached_payload,
     save_cached_payload,
-    selection_cache_key,
 )
 
 app = FastAPI(title="A股回测分析工作台", version="1.0.0")
+BACKTEST_ENGINE_VERSION = 3
+
+BOARD_FILTER_LABELS = {
+    "st": "排除 ST/退市",
+    "kc": "排除科创板",
+    "cy": "排除创业板",
+    "bse": "排除北交所",
+    "suspended": "排除停牌",
+}
+
+RANGED_FILTER_LABELS = {
+    "lowprice": ("排除低价股", "元以下"),
+    "highprice": ("排除高价股", "元以上"),
+    "mktcap_min": ("最小市值", "亿"),
+    "mktcap_max": ("最大市值", "亿"),
+    "newstock_days": ("上市天数", "天以上"),
+    "lowvol": ("最低成交额", "万元以上"),
+}
+
+STRATEGY_PARAM_LABELS = {
+    "brick": {
+        "brick_ma_short": ("短期均线", "日"),
+        "brick_ma_long": ("趋势均线", "日"),
+        "brick_below_days": ("低于短均线", "日"),
+        "brick_callback": ("回踩深度", "%"),
+        "brick_power": ("爆发力", "倍"),
+        "brick_kdj_limit": ("J值上限", ""),
+        "brick_gap_limit": ("次日高开限制", "%"),
+        "brick_breakout_buffer": ("突破缓冲", "%"),
+        "brick_take_profit": ("止盈", "%"),
+        "brick_stop_loss": ("止损", "%"),
+        "brick_max_hold_days": ("最大持仓", "天"),
+    },
+    "annual94": {
+        "brick_ma_short": ("短期均线", "日"),
+        "brick_ma_long": ("趋势均线", "日"),
+        "brick_below_days": ("低于短均线", "日"),
+        "brick_callback": ("回踩深度", "%"),
+        "brick_power": ("爆发力", "倍"),
+        "brick_kdj_limit": ("J值上限", ""),
+        "brick_gap_limit": ("次日高开限制", "%"),
+        "brick_breakout_buffer": ("突破缓冲", "%"),
+        "brick_take_profit": ("止盈", "%"),
+        "brick_stop_loss": ("止损", "%"),
+        "brick_max_hold_days": ("最大持仓", "天"),
+    },
+    "trend_surfer": {
+        "trend_fast_ma": ("快线", "日"),
+        "trend_mid_ma": ("中线", "日"),
+        "trend_slow_ma": ("慢线", "日"),
+        "trend_breakout_days": ("突破周期", "日"),
+        "trend_strong_days": ("强势窗口", "日"),
+        "trend_short_mom_min": ("20日动量", ""),
+        "trend_long_mom_min": ("60日动量", ""),
+        "trend_volume_mult": ("放量倍数", "倍"),
+        "trend_volume_window": ("量价窗口", "日"),
+        "trend_up_down_ratio": ("涨跌量比", "倍"),
+        "trend_pullback_volume_max": ("回踩缩量", "倍"),
+        "trend_breakout_buffer": ("突破缓冲", "%"),
+        "trend_gap_limit": ("次日高开限制", "%"),
+        "trend_fast_exit_drawdown": ("快线离场回撤", "%"),
+        "trend_trail_profit_trigger": ("回撤保护触发", "%"),
+        "trend_trail_drawdown": ("盈利回撤保护", "%"),
+        "trend_take_profit": ("止盈", "%"),
+        "trend_stop_loss": ("止损", "%"),
+        "trend_max_hold_days": ("最大持仓", "天"),
+    },
+    "main_wave": {
+        "main_base_ma": ("启动均线", "日"),
+        "main_trend_ma": ("趋势均线", "日"),
+        "main_anchor_ma": ("锚定均线", "日"),
+        "main_breakout_days": ("突破周期", "日"),
+        "main_setup_days": ("蓄势窗口", "日"),
+        "main_volume_window": ("量能窗口", "日"),
+        "main_breakout_buffer": ("突破缓冲", "%"),
+        "main_volume_mult": ("放量倍数", "倍"),
+        "main_close_strength": ("收盘强度", ""),
+        "main_pullback_limit": ("回撤上限", ""),
+        "main_tight_range_limit": ("平台宽度", ""),
+        "main_short_mom_min": ("20日动量", ""),
+        "main_long_mom_min": ("60日动量", ""),
+        "main_gap_limit": ("次日高开限制", "%"),
+        "main_take_profit": ("止盈", "%"),
+        "main_stop_loss": ("止损", "%"),
+        "main_trail_trigger": ("回撤保护触发", "%"),
+        "main_trail_drawdown": ("盈利回撤保护", "%"),
+        "main_max_hold_days": ("最大持仓", "天"),
+    },
+    "surge_relay": {
+        "relay_day1_min_pct": ("首日涨幅下限", "%"),
+        "relay_day1_max_pct": ("首日涨幅上限", "%"),
+        "relay_day1_vol_mult": ("首日放量倍数", "倍"),
+        "relay_day2_max_drop": ("回踩跌幅上限", "%"),
+        "relay_day2_vol_ratio_max": ("回踩缩量上限", "倍"),
+        "relay_day2_close_floor": ("回踩收盘底线", ""),
+        "relay_day3_min_pct": ("续涨涨幅下限", "%"),
+        "relay_day3_vol_ratio_min": ("续涨放量倍数", "倍"),
+        "relay_day3_close_strength": ("续涨收盘强度", ""),
+        "relay_day3_close_floor": ("续涨收盘修复", ""),
+        "relay_day3_high_floor": ("续涨高点修复", ""),
+        "relay_day3_break_high": ("续涨突破缓冲", "%"),
+        "relay_gap_limit": ("次日高开限制", "%"),
+        "relay_take_profit": ("止盈", "%"),
+        "relay_stop_loss": ("止损", "%"),
+        "relay_max_hold_days": ("最大持仓", "天"),
+    },
+}
 
 # ── 常量 ──────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(__file__)
@@ -48,7 +154,7 @@ os.makedirs(HISTORY_DIR, exist_ok=True)
 # ── 全局状态 ──────────────────────────────────────────────
 _is_running = False  # 防止并发重复提交
 _last_selection_results = {}
-_last_result = {"trades": [], "stats": {}}
+_last_result = {"trades": [], "stats": {}, "parameters": {}, "meta": {}}
 _last_sweep_results = {}
 
 
@@ -64,6 +170,78 @@ def _normalize_exclude_value(value: Any) -> list[str]:
     if isinstance(value, list):
         return _normalize_cache_list([str(x).strip() for x in value if str(x).strip()])
     return _normalize_cache_list([str(value).strip()])
+
+
+def _safe_number(value: Any) -> Any:
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return value
+    if num.is_integer():
+        return int(num)
+    return round(num, 4)
+
+
+def _build_history_parameters(
+    strategy: str,
+    max_positions: int,
+    initial_capital: float,
+    exclude_boards: list[str],
+) -> dict[str, Any]:
+    strategy_params: dict[str, Any] = {}
+    strategy_param_labels = STRATEGY_PARAM_LABELS.get(strategy, {})
+    filters: list[str] = []
+    raw_excludes: list[str] = []
+
+    for item in exclude_boards:
+        if ":" in item:
+            key, raw_value = item.split(":", 1)
+        else:
+            key, raw_value = item, None
+
+        if key in strategy_param_labels and raw_value is not None:
+            label, unit = strategy_param_labels[key]
+            strategy_params[key] = {
+                "label": label,
+                "value": _safe_number(raw_value),
+                "unit": unit,
+            }
+            continue
+
+        if key in BOARD_FILTER_LABELS and raw_value is None:
+            filters.append(BOARD_FILTER_LABELS[key])
+            continue
+
+        if key in RANGED_FILTER_LABELS and raw_value is not None:
+            label, unit = RANGED_FILTER_LABELS[key]
+            filters.append(f"{label} {raw_value}{unit}")
+            continue
+
+        raw_excludes.append(item)
+
+    summary_parts = [f"仓位 {max_positions} 只", f"资金 {initial_capital:,.0f} 元"]
+    for key in STRATEGY_PARAM_LABELS.get(strategy, {}):
+        item = strategy_params.get(key)
+        if not item:
+            continue
+        unit = item.get("unit") or ""
+        summary_parts.append(f"{item['label']} {item['value']}{unit}")
+    if filters:
+        filter_text = "、".join(filters[:3])
+        if len(filters) > 3:
+            filter_text += " 等"
+        summary_parts.append(filter_text)
+
+    return {
+        "summary": " | ".join(summary_parts),
+        "general": {
+            "max_positions": max_positions,
+            "initial_capital": round(initial_capital, 2),
+        },
+        "strategy_params": strategy_params,
+        "filters": filters,
+        "raw_excludes": raw_excludes,
+    }
 
 
 def _expand_parameter_grid(
@@ -97,6 +275,7 @@ async def _run_backtest_with_cache(
     log_callback,
 ) -> tuple[dict | None, list[dict], bool, dict[str, Any], str]:
     cache_params = {
+        "engine_version": BACKTEST_ENGINE_VERSION,
         "start_date": start_date,
         "end_date": end_date,
         "strategy": strategy,
@@ -155,6 +334,7 @@ def _save_history(
     exclude_boards: list[str],
     result: dict,
     trades: list[dict],
+    history_meta: dict[str, Any] | None = None,
 ) -> None:
     """将一次完整的回测结果写入 JSON 文件。"""
     created_at = datetime.datetime.now().isoformat(timespec="seconds")
@@ -177,6 +357,10 @@ def _save_history(
         "max_positions": max_positions,
         "initial_capital": initial_capital,
         "exclude_boards": exclude_boards,
+        "parameters": _build_history_parameters(
+            strategy, max_positions, initial_capital, exclude_boards
+        ),
+        "meta": history_meta or {},
         "stats": result,
         "trades": trades,
     }
@@ -197,6 +381,12 @@ def _list_history() -> list[dict]:
                 data = json.load(f)
             # 只返回摘要字段，不含 trades（减少传输量）
             stats = data.get("stats", {})
+            parameters = data.get("parameters") or _build_history_parameters(
+                data.get("strategy", ""),
+                int(data.get("max_positions", 0) or 0),
+                float(data.get("initial_capital", 0) or 0),
+                data.get("exclude_boards", []) or [],
+            )
             records.append(
                 {
                     "id": data.get("id"),
@@ -209,6 +399,9 @@ def _list_history() -> list[dict]:
                     "max_positions": data.get("max_positions"),
                     "initial_capital": data.get("initial_capital"),
                     "exclude_boards": data.get("exclude_boards", []),
+                    "parameters": parameters,
+                    "parameter_summary": parameters.get("summary", ""),
+                    "meta": data.get("meta", {}),
                     "total_trades": stats.get("total_trades", 0),
                     "win_rate": stats.get("win_rate", 0),
                     "avg_profit": stats.get("avg_profit", 0),
@@ -287,6 +480,15 @@ async def api_get_history(history_id: str):
         raise HTTPException(status_code=404, detail="历史记录不存在")
     with open(fpath, "r", encoding="utf-8") as f:
         data = json.load(f)
+    if not data.get("parameters"):
+        data["parameters"] = _build_history_parameters(
+            data.get("strategy", ""),
+            int(data.get("max_positions", 0) or 0),
+            float(data.get("initial_capital", 0) or 0),
+            data.get("exclude_boards", []) or [],
+        )
+    if not data.get("meta"):
+        data["meta"] = {}
     return JSONResponse(content=data)
 
 
@@ -316,7 +518,15 @@ async def start_backtest(request: Request):
     end_date = p.get("end_date", "2026-02-27")
     strategy = p.get("strategy", "rsv").lower()
 
-    default_max = {"rsv": 2, "ma": 5, "brick": 10}
+    default_max = {
+        "rsv": 2,
+        "ma": 5,
+        "brick": 2,
+        "annual94": 2,
+        "trend_surfer": 2,
+        "main_wave": 2,
+        "surge_relay": 3,
+    }
     try:
         max_positions = int(p.get("max_positions", default_max.get(strategy, 5)))
     except (ValueError, TypeError):
@@ -358,6 +568,10 @@ async def start_backtest(request: Request):
         try:
             _last_result["trades"] = []
             _last_result["stats"] = {}
+            _last_result["parameters"] = _build_history_parameters(
+                strategy, max_positions, initial_capital, exclude_boards
+            )
+            _last_result["meta"] = {"source": "backtest"}
 
             cached = load_cached_payload(BASE_DIR, "backtest", cache_key)
             if cached:
@@ -365,6 +579,7 @@ async def start_backtest(request: Request):
                 trades = list(cached.get("trades") or [])
                 _last_result["trades"] = trades
                 _last_result["stats"] = result
+                _last_result["meta"] = {"source": "backtest", "cache_hit": True}
                 await queue.put(
                     {
                         "time": datetime.datetime.now().strftime("%H:%M:%S"),
@@ -382,6 +597,7 @@ async def start_backtest(request: Request):
                     exclude_boards=exclude_boards,
                     result=result,
                     trades=trades,
+                    history_meta={"source": "backtest", "cache_hit": True},
                 )
                 await queue.put(
                     {
@@ -406,6 +622,7 @@ async def start_backtest(request: Request):
             )
             if result:
                 _last_result["stats"] = result
+                _last_result["meta"] = {"source": "backtest", "cache_hit": False}
                 save_cached_payload(
                     BASE_DIR,
                     "backtest",
@@ -427,6 +644,7 @@ async def start_backtest(request: Request):
                     exclude_boards=exclude_boards,
                     result=result,
                     trades=list(_last_result["trades"]),
+                    history_meta={"source": "backtest", "cache_hit": False},
                 )
                 await queue.put(
                     {
@@ -495,32 +713,10 @@ async def api_start_select_stocks(request: Request):
     exclude_boards_str = p.get("exclude", "")
     exclude_boards = [x.strip() for x in exclude_boards_str.split(",") if x.strip()]
     data_dir = os.path.join(BASE_DIR, "all_stock_data")
-    cache_params = {
-        "date": target_date,
-        "strategy": strategy,
-        "exclude_boards": _normalize_cache_list(exclude_boards),
-    }
-    cache_key = selection_cache_key(BASE_DIR, data_dir, cache_params)
 
     async def event_generator():
         # 用于接收日志回调的对列
         queue = asyncio.Queue()
-
-        cached = load_cached_payload(BASE_DIR, "selection", cache_key)
-        if cached:
-            cached_payload = {
-                "date": target_date,
-                "strategy": strategy,
-                "count": len(cached.get("data") or []),
-                "data": list(cached.get("data") or []),
-                "status": "success",
-                "cache_hit": True,
-            }
-            _last_selection_results.clear()
-            _last_selection_results.update(cached_payload)
-            yield f"data: {json.dumps({'level': 'INFO', 'message': f'命中选股缓存：{strategy} {target_date}'}, ensure_ascii=False)}\n\n"
-            yield "data: DONE\n\n"
-            return
 
         async def log_cb(level: str, msg: Any):
             await queue.put({"level": level, "message": msg})
@@ -557,12 +753,6 @@ async def api_start_select_stocks(request: Request):
                             "data": results,
                             "status": "success",
                         }
-                    )
-                    save_cached_payload(
-                        BASE_DIR,
-                        "selection",
-                        cache_key,
-                        {"data": results, "params": cache_params},
                     )
                     yield "data: DONE\n\n"
                 except Exception as e:
@@ -602,10 +792,12 @@ async def api_start_parameter_sweep(request: Request):
 
     try:
         max_positions = int(
-            p.get("max_positions", {"brick": 10, "rsv": 2}.get(strategy, 5))
+            p.get(
+                "max_positions", {"brick": 2, "annual94": 2, "rsv": 2}.get(strategy, 5)
+            )
         )
     except (ValueError, TypeError):
-        max_positions = {"brick": 10, "rsv": 2}.get(strategy, 5)
+        max_positions = {"brick": 2, "annual94": 2, "rsv": 2}.get(strategy, 5)
 
     exclude_boards = _normalize_exclude_value(p.get("exclude", ""))
     try:
@@ -697,6 +889,27 @@ async def api_start_parameter_sweep(request: Request):
                 if not result:
                     continue
 
+                history_id = uuid.uuid4().hex
+                _save_history(
+                    history_id=history_id,
+                    strategy=combo["strategy"],
+                    start_date=combo["start_date"],
+                    end_date=combo["end_date"],
+                    max_positions=int(combo["max_positions"]),
+                    initial_capital=float(combo["initial_capital"]),
+                    exclude_boards=_normalize_exclude_value(
+                        combo.get("exclude_boards", [])
+                    ),
+                    result=result,
+                    trades=trades,
+                    history_meta={
+                        "source": "parameter_sweep",
+                        "sweep_index": idx,
+                        "sweep_total": total,
+                        "cache_hit": cache_hit,
+                    },
+                )
+
                 strategy_return = round(
                     (
                         result.get("final_capital", combo["initial_capital"])
@@ -708,6 +921,7 @@ async def api_start_parameter_sweep(request: Request):
                 )
                 results.append(
                     {
+                        "history_id": history_id,
                         "params": cache_params,
                         "cache_hit": cache_hit,
                         "total_trades": result.get("total_trades", 0),

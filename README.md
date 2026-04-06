@@ -15,8 +15,10 @@
 ### 1. 安装依赖
 
 ```bash
-pip install fastapi uvicorn pandas numpy akshare tqdm
+pip install -r requirements.txt
 ```
+
+Windows 用户也可以直接双击 `start.bat` 一键安装依赖并启动服务。
 
 ### 2. 更新/下载股票数据（重要！）
 

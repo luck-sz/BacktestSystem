@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pandas
+numpy
+akshare
+tqdm
+duckdb
+requests

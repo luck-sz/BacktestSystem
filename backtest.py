@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
 
@@ -38,9 +38,15 @@ RENAME_MAP = {
 STRATEGY_NAMES = {
     "rsv": "RSV超卖",
     "brick": "超跌反弹",
+    "annual94": "年化94",
     "small_bank": "小市值",
     "green_rebound": "绿柱缩短",
+    "trend_surfer": "趋势龙头",
+    "main_wave": "主升浪启动",
+    "surge_relay": "放量回踩续涨",
 }
+
+BRICK_STRATEGIES = {"brick", "annual94"}
 
 MIN_ROWS = 25  # 数据行数过少则跳过
 CACHE_DIRNAME = ".frame_cache"
@@ -155,13 +161,33 @@ def _has_custom_brick_params(exclude_boards: list[str] | None) -> bool:
     return any(item.startswith("brick_") for item in (exclude_boards or []))
 
 
+def _get_strategy_param(
+    exclude_boards: list[str] | None,
+    key: str,
+    default: Any,
+    caster: Callable[[str], Any],
+    *,
+    absolute: bool = False,
+) -> Any:
+    for item in exclude_boards or []:
+        if not item.startswith(f"{key}:"):
+            continue
+        _, raw_value = item.split(":", 1)
+        try:
+            value = caster(raw_value)
+            return abs(value) if absolute else value
+        except Exception:
+            return default
+    return default
+
+
 def _apply_precomputed_factors(
     df: pd.DataFrame,
     file_path: str,
     strategy: str,
     exclude_boards: list[str] | None = None,
 ) -> pd.DataFrame | None:
-    if strategy == "brick":
+    if strategy in BRICK_STRATEGIES:
         return None
 
     factors = _read_factor_frame(file_path)
@@ -182,10 +208,15 @@ def _apply_precomputed_factors(
     return None
 
 
-def _map_batch_parallel(
-    executor: ProcessPoolExecutor, batch: list[tuple]
-) -> list[tuple]:
+def _map_batch_parallel(executor, batch: list[tuple]) -> list[tuple]:
     return list(executor.map(_load_single_file, batch, chunksize=MAP_CHUNK_SIZE))
+
+
+def _create_selection_executor():
+    """Windows 下避免 ProcessPool 拉起大量控制台窗口。"""
+    if os.name == "nt":
+        return ThreadPoolExecutor(max_workers=POOL_WORKERS)
+    return ProcessPoolExecutor(max_workers=POOL_WORKERS)
 
 
 # ─────────────────────── 指标计算 ───────────────────────
@@ -212,34 +243,22 @@ def _calc_brick(
 ) -> pd.DataFrame:
     """砖型图打分策略指标（通达信风格近似）"""
     exclude_boards = exclude_boards or []
-    ma_short = 5
-    below_days = 5
-    explosive_power = 1.0
-    kdj_limit = 0.0
+    ma_short = _get_strategy_param(exclude_boards, "brick_ma_short", 6, int)
+    ma_long = _get_strategy_param(exclude_boards, "brick_ma_long", 40, int)
+    below_days = _get_strategy_param(exclude_boards, "brick_below_days", 5, int)
+    callback_depth = _get_strategy_param(
+        exclude_boards, "brick_callback", 1.0, float, absolute=True
+    )
+    explosive_power = _get_strategy_param(exclude_boards, "brick_power", 1.0, float)
+    kdj_limit = _get_strategy_param(exclude_boards, "brick_kdj_limit", 0.0, float)
+    breakout_buffer = _get_strategy_param(
+        exclude_boards, "brick_breakout_buffer", 0.0, float
+    )
 
-    for item in exclude_boards:
-        if item.startswith("brick_ma_short:"):
-            try:
-                ma_short = int(item.split(":")[1])
-            except:
-                pass
-        elif item.startswith("brick_below_days:"):
-            try:
-                below_days = int(item.split(":")[1])
-            except:
-                pass
-        elif item.startswith("brick_power:"):
-            try:
-                explosive_power = float(item.split(":")[1])
-            except:
-                pass
-        elif item.startswith("brick_kdj_limit:"):
-            try:
-                kdj_limit = float(item.split(":")[1])
-            except:
-                pass
+    callback_mult = max(0.0, 1.0 - callback_depth / 100.0)
 
     df["ma5"] = df["close"].rolling(ma_short).mean()
+    df["ma60"] = df["close"].rolling(ma_long).mean()
 
     low9 = df["low"].rolling(9).min()
     high9 = df["high"].rolling(9).max()
@@ -270,22 +289,20 @@ def _calc_brick(
     red_len = b0 - b1
     green_len = b2 - b1
 
-    # color_ok: 要求指标出现 V 型反向
-    color_ok = (b1 < b2) & (b0 > b1)
-    # power_ok: T日红柱长度绝对值需大于绿柱的 1 倍 (或其他特定比例)
+    color_ok = (b1 < b2) & (b0 > b1) & (b1 <= b2 * callback_mult)
     power_ok = red_len > (green_len * explosive_power)
-
+    trend_ok = df["close"] > df["ma60"]
     oversold_ok = df["j"].shift(1).rolling(5).min() < kdj_limit
 
-    # 排除今天，最近 N 日的收盘价都比短期均线低
     is_below_ma5 = df["close"] < df["ma5"]
     below_ma5_5days = is_below_ma5.shift(1).rolling(below_days).sum() == below_days
 
-    # 信号触发：今日必须收盘站上 MA5 (完成反转确认)
-    is_breakout = df["close"] > df["ma5"]
+    is_breakout = df["close"] >= df["ma5"] * (1 + breakout_buffer / 100.0)
 
     df["brick_score"] = red_len / (green_len + 0.001)
-    df["buy_signal"] = color_ok & power_ok & oversold_ok & below_ma5_5days & is_breakout
+    df["buy_signal"] = color_ok & trend_ok & power_ok & oversold_ok & below_ma5_5days
+    if breakout_buffer > 0:
+        df["buy_signal"] = df["buy_signal"] & is_breakout
     return df
 
 
@@ -357,11 +374,258 @@ def _calc_green_rebound(
     return df
 
 
+def _calc_trend_surfer(
+    df: pd.DataFrame, exclude_boards: Optional[list[str]] = None
+) -> pd.DataFrame:
+    """趋势突破策略指标（中期趋势 + 新高突破 + 放量确认）"""
+    exclude_boards = exclude_boards or []
+    fast_ma = _get_strategy_param(exclude_boards, "trend_fast_ma", 20, int)
+    mid_ma = _get_strategy_param(exclude_boards, "trend_mid_ma", 60, int)
+    slow_ma = _get_strategy_param(exclude_boards, "trend_slow_ma", 120, int)
+    breakout_lookback = _get_strategy_param(
+        exclude_boards, "trend_breakout_days", 55, int
+    )
+    strong_window = _get_strategy_param(exclude_boards, "trend_strong_days", 20, int)
+    short_mom_min = _get_strategy_param(
+        exclude_boards, "trend_short_mom_min", 0.12, float
+    )
+    long_mom_min = _get_strategy_param(
+        exclude_boards, "trend_long_mom_min", 0.25, float
+    )
+    volume_mult = _get_strategy_param(exclude_boards, "trend_volume_mult", 1.2, float)
+    volume_window = _get_strategy_param(exclude_boards, "trend_volume_window", 15, int)
+    up_down_ratio_min = _get_strategy_param(
+        exclude_boards, "trend_up_down_ratio", 1.1, float
+    )
+    pullback_volume_max = _get_strategy_param(
+        exclude_boards, "trend_pullback_volume_max", 0.95, float
+    )
+    buffer_pct = _get_strategy_param(
+        exclude_boards, "trend_breakout_buffer", 0.0, float
+    )
+
+    df["ma_fast"] = df["close"].rolling(fast_ma).mean()
+    df["ma_mid"] = df["close"].rolling(mid_ma).mean()
+    df["ma_slow"] = df["close"].rolling(slow_ma).mean()
+    df["vol_ma20"] = df["volume"].rolling(20).mean()
+    df["high_breakout"] = df["high"].shift(1).rolling(breakout_lookback).max()
+    df["low_trail"] = df["low"].shift(1).rolling(10).min()
+    df["high_strong"] = df["high"].rolling(strong_window).max()
+
+    prev_close = df["close"].shift(1)
+    day_ret = df["close"] / prev_close - 1
+    df["mom_20"] = df["close"] / df["close"].shift(20) - 1
+    df["mom_60"] = df["close"] / df["close"].shift(60) - 1
+    df["pullback_from_high"] = df["close"] / df["high_strong"] - 1
+    df["volume_ratio"] = df["volume"] / df["vol_ma20"].replace(0, np.nan)
+    up_volume = df["volume"].where(day_ret > 0, np.nan)
+    down_volume = df["volume"].where(day_ret < 0, np.nan)
+    df["up_volume_avg"] = up_volume.rolling(volume_window, min_periods=3).mean()
+    df["down_volume_avg"] = down_volume.rolling(volume_window, min_periods=3).mean()
+    df["up_down_volume_ratio"] = df["up_volume_avg"] / df["down_volume_avg"].replace(
+        0, np.nan
+    )
+    recent_pullback = (day_ret.shift(1).rolling(5, min_periods=3).min() < 0) & (
+        df["close"] >= df["ma_fast"]
+    )
+    df["pullback_volume_ratio"] = down_volume.rolling(5, min_periods=2).mean() / df[
+        "vol_ma20"
+    ].replace(0, np.nan)
+
+    trend_ok = (
+        (df["ma_fast"] > df["ma_mid"])
+        & (df["ma_mid"] > df["ma_slow"])
+        & (df["close"] > df["ma_fast"])
+        & (df["ma_mid"] > df["ma_mid"].shift(5))
+    )
+    breakout_ok = df["close"] >= df["high_breakout"] * (1 + buffer_pct / 100.0)
+    momentum_ok = (df["mom_20"] >= short_mom_min) & (df["mom_60"] >= long_mom_min)
+    strength_ok = df["close"] >= df["high_strong"] * 0.97
+    volume_ok = df["volume_ratio"] >= volume_mult
+    structure_ok = df["up_down_volume_ratio"].fillna(0) >= up_down_ratio_min
+    pullback_ok = (~recent_pullback) | (
+        df["pullback_volume_ratio"].fillna(0) <= pullback_volume_max
+    )
+    limit_up_ok = (df["close"] / prev_close - 1).fillna(0) < 0.095
+
+    df["buy_signal"] = (
+        trend_ok
+        & breakout_ok
+        & momentum_ok
+        & strength_ok
+        & volume_ok
+        & structure_ok
+        & pullback_ok
+        & limit_up_ok
+    )
+    df["trend_score"] = (
+        df["mom_60"].fillna(0) * 100
+        + df["mom_20"].fillna(0) * 80
+        + df["volume_ratio"].fillna(0) * 10
+        + df["up_down_volume_ratio"].fillna(0) * 15
+        - df["pullback_volume_ratio"].fillna(0) * 10
+        + df["pullback_from_high"].fillna(-1) * 50
+    )
+    return df
+
+
+def _calc_main_wave(
+    df: pd.DataFrame, exclude_boards: Optional[list[str]] = None
+) -> pd.DataFrame:
+    """主升浪启动策略指标（蓄势收敛 + 放量突破 + 趋势共振）"""
+    exclude_boards = exclude_boards or []
+    base_ma = _get_strategy_param(exclude_boards, "main_base_ma", 10, int)
+    trend_ma = _get_strategy_param(exclude_boards, "main_trend_ma", 20, int)
+    anchor_ma = _get_strategy_param(exclude_boards, "main_anchor_ma", 60, int)
+    breakout_days = _get_strategy_param(exclude_boards, "main_breakout_days", 20, int)
+    setup_window = _get_strategy_param(exclude_boards, "main_setup_days", 18, int)
+    volume_window = _get_strategy_param(exclude_boards, "main_volume_window", 5, int)
+    breakout_buffer = _get_strategy_param(
+        exclude_boards, "main_breakout_buffer", 0.0, float
+    )
+    volume_mult = _get_strategy_param(exclude_boards, "main_volume_mult", 1.1, float)
+    close_strength_min = _get_strategy_param(
+        exclude_boards, "main_close_strength", 0.4, float
+    )
+    pullback_limit = _get_strategy_param(
+        exclude_boards, "main_pullback_limit", 0.18, float
+    )
+    tight_range_limit = _get_strategy_param(
+        exclude_boards, "main_tight_range_limit", 0.4, float
+    )
+    short_mom_min = _get_strategy_param(
+        exclude_boards, "main_short_mom_min", 0.0, float
+    )
+    long_mom_min = _get_strategy_param(exclude_boards, "main_long_mom_min", 0.03, float)
+
+    df["ma_base"] = df["close"].rolling(base_ma).mean()
+    df["ma_trend"] = df["close"].rolling(trend_ma).mean()
+    df["ma_anchor"] = df["close"].rolling(anchor_ma).mean()
+    df["vol_ma"] = df["volume"].rolling(volume_window).mean()
+    df["avg_turnover20"] = (
+        (df["close"] * df["volume"]).rolling(20, min_periods=1).mean()
+    )
+
+    setup_high = df["high"].shift(1).rolling(setup_window).max()
+    setup_low = df["low"].shift(1).rolling(setup_window).min()
+    breakout_high = df["high"].shift(1).rolling(breakout_days).max()
+    strong_high = df["high"].shift(1).rolling(120).max()
+
+    df["mom_20"] = df["close"] / df["close"].shift(20) - 1
+    df["mom_60"] = df["close"] / df["close"].shift(60) - 1
+    df["volume_ratio"] = df["volume"] / df["vol_ma"].replace(0, np.nan)
+
+    setup_range = (setup_high - setup_low) / setup_low.replace(0, np.nan)
+    retrace_from_high = (setup_high - df["close"]) / setup_high.replace(0, np.nan)
+    close_strength = (df["close"] - df["low"]) / (df["high"] - df["low"]).replace(
+        0, np.nan
+    )
+    base_support = (df["close"] >= df["ma_base"] * 0.98) & (
+        df["low"].rolling(5).min() >= df["ma_base"] * 0.94
+    )
+    trend_ok = (
+        (df["ma_base"] > df["ma_trend"])
+        & (df["ma_trend"] > df["ma_anchor"])
+        & (df["close"] > df["ma_trend"])
+        & (df["ma_trend"] > df["ma_trend"].shift(5))
+        & (df["ma_anchor"] >= df["ma_anchor"].shift(10))
+    )
+    setup_ok = (
+        (setup_range <= tight_range_limit)
+        & (retrace_from_high <= pullback_limit)
+        & base_support
+    )
+    breakout_ok = df["close"] >= breakout_high * (1 + breakout_buffer / 100.0)
+    near_stage_high = df["close"] >= strong_high * 0.92
+    momentum_ok = (df["mom_20"] >= short_mom_min) & (df["mom_60"] >= long_mom_min)
+    volume_ok = df["volume_ratio"] >= volume_mult
+    close_ok = close_strength >= close_strength_min
+    limit_up_ok = (df["pct_chg"].fillna(0) < 9.5) & (df["pct_chg"].fillna(0) > -9.5)
+
+    df["buy_signal"] = (
+        trend_ok
+        & setup_ok
+        & breakout_ok
+        & near_stage_high
+        & momentum_ok
+        & volume_ok
+        & close_ok
+        & limit_up_ok
+    )
+    df["main_wave_score"] = (
+        df["mom_60"].fillna(0) * 120
+        + df["mom_20"].fillna(0) * 80
+        + df["volume_ratio"].fillna(0) * 15
+        + (1 - setup_range.fillna(1).clip(lower=0, upper=1)) * 30
+        + (1 - retrace_from_high.fillna(1).clip(lower=0, upper=1)) * 25
+        + close_strength.fillna(0) * 15
+    )
+    df["low_trail"] = df["low"].shift(1).rolling(10).min()
+    return df
+
+
+def _calc_surge_relay(
+    df: pd.DataFrame, exclude_boards: Optional[list[str]] = None
+) -> pd.DataFrame:
+    """三日放量启动：上涨 -> 缩量回踩 -> 放量续涨"""
+    exclude_boards = exclude_boards or []
+    df["ma5"] = df["close"].rolling(5).mean()
+    df["ma10"] = df["close"].rolling(10).mean()
+    df["avg_turnover20"] = (
+        (df["close"] * df["volume"]).rolling(20, min_periods=1).mean()
+    )
+
+    prev_vol = df["volume"].shift(3)
+    day1_vol = df["volume"].shift(2)
+    day2_vol = df["volume"].shift(1)
+    day3_vol = df["volume"]
+
+    day1_pct = df["pct_chg"].shift(2)
+    day2_pct = df["pct_chg"].shift(1)
+    day3_pct = df["pct_chg"]
+
+    day1_close = df["close"].shift(2)
+    day2_close = df["close"].shift(1)
+    day3_close = df["close"]
+    day1_open = df["open"].shift(2)
+    day2_open = df["open"].shift(1)
+    day1_high = df["high"].shift(2)
+    day3_high = df["high"]
+
+    day3_range = (df["high"] - df["low"]).replace(0, np.nan)
+    day3_close_pos = (df["close"] - df["low"]) / day3_range
+
+    cond_day1 = (day1_pct > 0) & (day1_close > day1_open)
+    cond_day2 = (day2_close < day2_open) & (day2_vol < day1_vol)
+    cond_day3 = (day3_pct > 0) & (day3_vol > day2_vol)
+    trend_ok = (
+        (day1_close >= df["ma5"].shift(2))
+        & (day2_close >= df["ma5"].shift(1))
+        & (day3_close >= df["ma5"])
+    )
+
+    df["buy_signal"] = cond_day1 & cond_day2 & cond_day3 & trend_ok
+    df["relay_score"] = (
+        day1_pct.fillna(0) * 1.6
+        + day3_pct.fillna(0) * 2.4
+        + (day1_vol / prev_vol.replace(0, np.nan)).fillna(0) * 8
+        + (day3_vol / day2_vol.replace(0, np.nan)).fillna(0) * 10
+        + (1 + day2_pct.fillna(0) / 100.0) * 12
+        + day3_close_pos.fillna(0) * 10
+    )
+    df["relay_defense"] = df["low"].shift(1).rolling(3).min()
+    return df
+
+
 _INDICATOR_FUNCS = {
     "rsv": _calc_rsv,
     "brick": _calc_brick,
+    "annual94": _calc_brick,
     "small_bank": _calc_small_bank,
     "green_rebound": _calc_green_rebound,
+    "trend_surfer": _calc_trend_surfer,
+    "main_wave": _calc_main_wave,
+    "surge_relay": _calc_surge_relay,
 }
 
 
@@ -468,7 +732,7 @@ async def run_backtest_async(
 
     # ── 1. 扫描数据文件列表 ──
     exclude_boards = exclude_boards or []
-    candidate_files = resolve_stock_files(data_dir, prefer_parquet=False)
+    candidate_files = resolve_stock_files(data_dir, prefer_parquet=True)
     csv_files: list[str] = []
     for file_path in candidate_files:
         code = Path(file_path).stem[:6]
@@ -496,6 +760,69 @@ async def run_backtest_async(
     start_ts = pd.Timestamp(start_date)
     end_ts = pd.Timestamp(end_date)
     args_list = [(fp, strategy, start_ts, end_ts, exclude_boards) for fp in csv_files]
+    brick_gap_limit = _get_strategy_param(
+        exclude_boards, "brick_gap_limit", 0.3, float, absolute=True
+    )
+    brick_take_profit = _get_strategy_param(
+        exclude_boards, "brick_take_profit", 12.0, float, absolute=True
+    )
+    brick_stop_loss = _get_strategy_param(
+        exclude_boards, "brick_stop_loss", 6.0, float, absolute=True
+    )
+    brick_max_hold_days = _get_strategy_param(
+        exclude_boards, "brick_max_hold_days", 10, int, absolute=True
+    )
+    trend_gap_limit = _get_strategy_param(
+        exclude_boards, "trend_gap_limit", 4.0, float, absolute=True
+    )
+    trend_fast_exit_drawdown = _get_strategy_param(
+        exclude_boards, "trend_fast_exit_drawdown", 6.0, float, absolute=True
+    )
+    trend_trail_profit_trigger = _get_strategy_param(
+        exclude_boards, "trend_trail_profit_trigger", 999.0, float, absolute=True
+    )
+    trend_trail_drawdown = _get_strategy_param(
+        exclude_boards, "trend_trail_drawdown", 999.0, float, absolute=True
+    )
+    trend_take_profit = _get_strategy_param(
+        exclude_boards, "trend_take_profit", 999.0, float, absolute=True
+    )
+    trend_stop_loss = _get_strategy_param(
+        exclude_boards, "trend_stop_loss", 8.0, float, absolute=True
+    )
+    trend_max_hold_days = _get_strategy_param(
+        exclude_boards, "trend_max_hold_days", 40, int, absolute=True
+    )
+    main_gap_limit = _get_strategy_param(
+        exclude_boards, "main_gap_limit", 5.0, float, absolute=True
+    )
+    main_take_profit = _get_strategy_param(
+        exclude_boards, "main_take_profit", 35.0, float, absolute=True
+    )
+    main_stop_loss = _get_strategy_param(
+        exclude_boards, "main_stop_loss", 7.0, float, absolute=True
+    )
+    main_trail_trigger = _get_strategy_param(
+        exclude_boards, "main_trail_trigger", 15.0, float, absolute=True
+    )
+    main_trail_drawdown = _get_strategy_param(
+        exclude_boards, "main_trail_drawdown", 7.0, float, absolute=True
+    )
+    main_max_hold_days = _get_strategy_param(
+        exclude_boards, "main_max_hold_days", 30, int, absolute=True
+    )
+    relay_gap_limit = _get_strategy_param(
+        exclude_boards, "relay_gap_limit", 4.0, float, absolute=True
+    )
+    relay_take_profit = _get_strategy_param(
+        exclude_boards, "relay_take_profit", 12.0, float, absolute=True
+    )
+    relay_stop_loss = _get_strategy_param(
+        exclude_boards, "relay_stop_loss", 5.0, float, absolute=True
+    )
+    relay_max_hold_days = _get_strategy_param(
+        exclude_boards, "relay_max_hold_days", 8, int, absolute=True
+    )
 
     # ── 2. 并发预加载 & 指标计算（使用进程池避免 GIL） ──
     stock_data: dict[str, pd.DataFrame] = {}
@@ -504,7 +831,7 @@ async def run_backtest_async(
 
     batch_size = LOAD_BATCH_SIZE
 
-    with ProcessPoolExecutor(max_workers=POOL_WORKERS) as executor:
+    with _create_selection_executor() as executor:
         for batch_start in range(0, total_files, batch_size):
             batch = args_list[batch_start : batch_start + batch_size]
             results = await asyncio.to_thread(_map_batch_parallel, executor, batch)
@@ -568,12 +895,41 @@ async def run_backtest_async(
             row = df.loc[current_date]
             open_price = float(row.get("open", np.nan))
 
-            # 砖型图策略：过滤跳空高开 > 0.5%
-            if strategy == "brick" and i > 0:
+            # 砖型图策略：过滤次日高开过猛，降低追高回撤
+            if strategy in BRICK_STRATEGIES and i > 0:
                 prev_date = sorted_dates[i - 1]
                 if prev_date in df.index:
                     prev_close = float(df.loc[prev_date, "close"])
-                    if prev_close > 0 and (open_price / prev_close - 1) > 0.005:
+                    if prev_close > 0 and (open_price / prev_close - 1) > (
+                        brick_gap_limit / 100.0
+                    ):
+                        continue
+
+            if strategy == "trend_surfer" and i > 0:
+                prev_date = sorted_dates[i - 1]
+                if prev_date in df.index:
+                    prev_close = float(df.loc[prev_date, "close"])
+                    if prev_close > 0 and (open_price / prev_close - 1) > (
+                        trend_gap_limit / 100.0
+                    ):
+                        continue
+
+            if strategy == "main_wave" and i > 0:
+                prev_date = sorted_dates[i - 1]
+                if prev_date in df.index:
+                    prev_close = float(df.loc[prev_date, "close"])
+                    if prev_close > 0 and (open_price / prev_close - 1) > (
+                        main_gap_limit / 100.0
+                    ):
+                        continue
+
+            if strategy == "surge_relay" and i > 0:
+                prev_date = sorted_dates[i - 1]
+                if prev_date in df.index:
+                    prev_close = float(df.loc[prev_date, "close"])
+                    if prev_close > 0 and (open_price / prev_close - 1) > (
+                        relay_gap_limit / 100.0
+                    ):
                         continue
 
             if np.isnan(open_price) or open_price <= 0:
@@ -589,6 +945,7 @@ async def run_backtest_async(
                 "start_idx": i,
                 "shares": shares,
                 "buy_amount": actual_cost,
+                "peak_close": open_price,
             }
             bought_today.append(stock)
 
@@ -647,6 +1004,9 @@ async def run_backtest_async(
             sell_price = float(df.loc[current_date, "close"])
             hold_days = i - info["start_idx"]
             profit_pct = (sell_price - info["buy_price"]) / info["buy_price"] * 100
+            info["peak_close"] = max(
+                float(info.get("peak_close", sell_price)), sell_price
+            )
 
             sell_reason = None
             if strategy == "small_bank":
@@ -668,7 +1028,7 @@ async def run_backtest_async(
                                 sell_reason = f"放量卖出(放量至新高90%以上)"
                     elif hold_days >= 5:
                         sell_reason = "持仓满5天无条件清仓(时间止损)"
-            elif strategy == "brick":
+            elif strategy in BRICK_STRATEGIES:
                 if hold_days >= 1:
                     close_p = float(df.loc[current_date, "close"])
                     ma_short = (
@@ -677,12 +1037,118 @@ async def run_backtest_async(
                         else 0.0
                     )
 
-                    if ma_short > 0 and close_p < ma_short:
+                    if profit_pct >= brick_take_profit:
+                        sell_price = close_p
+                        profit_pct = (
+                            (sell_price - info["buy_price"]) / info["buy_price"] * 100
+                        )
+                        sell_reason = f"波段止盈触发(盈利>={brick_take_profit:.1f}%)"
+                    elif profit_pct <= -brick_stop_loss:
+                        sell_price = close_p
+                        profit_pct = (
+                            (sell_price - info["buy_price"]) / info["buy_price"] * 100
+                        )
+                        sell_reason = f"波段止损触发(亏损>={brick_stop_loss:.1f}%)"
+                    elif hold_days >= brick_max_hold_days:
+                        sell_price = close_p
+                        profit_pct = (
+                            (sell_price - info["buy_price"]) / info["buy_price"] * 100
+                        )
+                        sell_reason = f"持仓满{brick_max_hold_days}天波段了结"
+                    elif ma_short > 0 and close_p < ma_short:
                         sell_price = close_p
                         profit_pct = (
                             (sell_price - info["buy_price"]) / info["buy_price"] * 100
                         )
                         sell_reason = "尾盘跌破短期均线(5日线)卖出"
+            elif strategy == "trend_surfer":
+                if hold_days >= 1:
+                    close_p = float(df.loc[current_date, "close"])
+                    ma_fast = float(df.loc[current_date, "ma_fast"] or 0.0)
+                    ma_mid = float(df.loc[current_date, "ma_mid"] or 0.0)
+                    low_trail = float(df.loc[current_date, "low_trail"] or 0.0)
+                    peak_close = float(info.get("peak_close", close_p))
+                    drawdown_pct = (
+                        (close_p - peak_close) / peak_close * 100
+                        if peak_close > 0
+                        else 0.0
+                    )
+
+                    if profit_pct >= trend_take_profit:
+                        sell_reason = f"趋势止盈触发(盈利>={trend_take_profit:.1f}%)"
+                    elif profit_pct <= -trend_stop_loss:
+                        sell_reason = f"趋势止损触发(亏损>={trend_stop_loss:.1f}%)"
+                    elif hold_days >= trend_max_hold_days:
+                        sell_reason = f"持仓满{trend_max_hold_days}天趋势了结"
+                    elif (
+                        profit_pct >= trend_trail_profit_trigger
+                        and drawdown_pct <= -trend_trail_drawdown
+                    ):
+                        sell_reason = (
+                            f"盈利达到{trend_trail_profit_trigger:.1f}%后回撤"
+                            f">={trend_trail_drawdown:.1f}%离场"
+                        )
+                    elif (
+                        ma_fast > 0
+                        and close_p < ma_fast
+                        and drawdown_pct <= -trend_fast_exit_drawdown
+                    ):
+                        sell_reason = "跌破快线且自高点回撤扩大"
+                    elif low_trail > 0 and close_p < low_trail:
+                        sell_reason = "跌破10日低点离场"
+                    elif ma_mid > 0 and close_p < ma_mid:
+                        sell_reason = "跌破中期趋势线离场"
+            elif strategy == "main_wave":
+                if hold_days >= 1:
+                    close_p = float(df.loc[current_date, "close"])
+                    ma_base = float(df.loc[current_date, "ma_base"] or 0.0)
+                    ma_trend = float(df.loc[current_date, "ma_trend"] or 0.0)
+                    low_trail = float(df.loc[current_date, "low_trail"] or 0.0)
+                    peak_close = float(info.get("peak_close", close_p))
+                    drawdown_pct = (
+                        (close_p - peak_close) / peak_close * 100
+                        if peak_close > 0
+                        else 0.0
+                    )
+
+                    if profit_pct >= main_take_profit:
+                        sell_reason = f"主升浪止盈触发(盈利>={main_take_profit:.1f}%)"
+                    elif profit_pct <= -main_stop_loss:
+                        sell_reason = f"主升浪止损触发(亏损>={main_stop_loss:.1f}%)"
+                    elif hold_days >= main_max_hold_days:
+                        sell_reason = f"持仓满{main_max_hold_days}天波段了结"
+                    elif (
+                        profit_pct >= main_trail_trigger
+                        and drawdown_pct <= -main_trail_drawdown
+                    ):
+                        sell_reason = (
+                            f"盈利达到{main_trail_trigger:.1f}%后回撤"
+                            f">={main_trail_drawdown:.1f}%离场"
+                        )
+                    elif low_trail > 0 and close_p < low_trail:
+                        sell_reason = "跌破10日防守位离场"
+                    elif ma_base > 0 and close_p < ma_base:
+                        sell_reason = "跌破启动均线离场"
+                    elif ma_trend > 0 and close_p < ma_trend:
+                        sell_reason = "跌破中期趋势线离场"
+            elif strategy == "surge_relay":
+                if hold_days >= 1:
+                    close_p = float(df.loc[current_date, "close"])
+                    ma5 = float(df.loc[current_date, "ma5"] or 0.0)
+                    defense = float(df.loc[current_date, "relay_defense"] or 0.0)
+
+                    if profit_pct >= relay_take_profit:
+                        sell_reason = (
+                            f"续涨策略止盈触发(盈利>={relay_take_profit:.1f}%)"
+                        )
+                    elif profit_pct <= -relay_stop_loss:
+                        sell_reason = f"续涨策略止损触发(亏损>={relay_stop_loss:.1f}%)"
+                    elif hold_days >= relay_max_hold_days:
+                        sell_reason = f"持仓满{relay_max_hold_days}天离场"
+                    elif defense > 0 and close_p < defense:
+                        sell_reason = "跌破三日防守位离场"
+                    elif ma5 > 0 and close_p < ma5:
+                        sell_reason = "跌破5日线离场"
             else:
                 sell_reason = _judge_sell(strategy, hold_days, profit_pct)
                 if not sell_reason and hold_days >= 5:
@@ -895,7 +1361,7 @@ def _select_candidates(
                 if rl >= 80 and rs <= 20 and vr > 0:
                     candidates.append({"stock": stock, "score": float(vr)})
 
-        elif strategy == "brick":
+        elif strategy in BRICK_STRATEGIES:
             sig = row.get("buy_signal")
             if pd.notnull(sig) and sig:
                 candidates.append(
@@ -907,6 +1373,27 @@ def _select_candidates(
             if pd.notnull(sig) and sig:
                 candidates.append(
                     {"stock": stock, "score": float(row.get("green_score", 0))}
+                )
+
+        elif strategy == "trend_surfer":
+            sig = row.get("buy_signal")
+            if pd.notnull(sig) and sig:
+                candidates.append(
+                    {"stock": stock, "score": float(row.get("trend_score", 0))}
+                )
+
+        elif strategy == "main_wave":
+            sig = row.get("buy_signal")
+            if pd.notnull(sig) and sig:
+                candidates.append(
+                    {"stock": stock, "score": float(row.get("main_wave_score", 0))}
+                )
+
+        elif strategy == "surge_relay":
+            sig = row.get("buy_signal")
+            if pd.notnull(sig) and sig:
+                candidates.append(
+                    {"stock": stock, "score": float(row.get("relay_score", 0))}
                 )
 
         elif strategy == "small_bank":
@@ -956,7 +1443,7 @@ def _select_candidates(
         # RSV 策略：取成交量放大倍数最小的（缩量）
         candidates.sort(key=lambda x: x["score"])
         return [c["stock"] for c in candidates[:available_slots]]
-    elif strategy == "brick":
+    elif strategy in BRICK_STRATEGIES:
         # Brick：暂无特定排序或随机取，可以按 score 从高到低
         candidates.sort(key=lambda x: x["score"], reverse=True)
         return [c["stock"] for c in candidates[:available_slots]]
@@ -1013,7 +1500,7 @@ async def select_stocks_async(
     await log("INFO", f"共扫描到 {total_files} 只个股，准备计算技术指标...")
 
     # 2. 并发加载 & 计算指标
-    start_ts = target_ts - pd.Timedelta(days=120)
+    start_ts = target_ts - pd.Timedelta(days=500)
     args_list = [
         (fp, strategy, start_ts, target_ts, exclude_boards) for fp in csv_files
     ]
@@ -1022,7 +1509,7 @@ async def select_stocks_async(
     stock_names: dict[str, str] = {}
 
     batch_size = LOAD_BATCH_SIZE
-    with ProcessPoolExecutor(max_workers=POOL_WORKERS) as executor:
+    with _create_selection_executor() as executor:
         for batch_start in range(0, total_files, batch_size):
             batch = args_list[batch_start : batch_start + batch_size]
             results = await asyncio.to_thread(_map_batch_parallel, executor, batch)
@@ -1066,22 +1553,26 @@ async def select_stocks_async(
             else:
                 pct_val = 0
 
+        if strategy in BRICK_STRATEGIES:
+            score_value = float(row.get("brick_score", 0))
+        elif strategy == "green_rebound":
+            score_value = float(row.get("green_score", 0))
+        elif strategy == "trend_surfer":
+            score_value = float(row.get("trend_score", 0))
+        elif strategy == "main_wave":
+            score_value = float(row.get("main_wave_score", 0))
+        elif strategy == "surge_relay":
+            score_value = float(row.get("relay_score", 0))
+        else:
+            score_value = 0.0
+
         final_results.append(
             {
                 "code": code,
                 "name": stock_names.get(code, code),
                 "close": round(float(row.get("close", 0)), 2),
                 "pct_chg": round(float(pct_val), 2),
-                "score": round(
-                    float(row.get("brick_score", 0))
-                    if strategy == "brick"
-                    else (
-                        float(row.get("green_score", 0))
-                        if strategy == "green_rebound"
-                        else 0
-                    ),
-                    2,
-                ),
+                "score": round(score_value, 2),
                 "signal": "买入",
                 "industry": str(row.get("industry", "")),
                 "region": str(row.get("region", "")),

@@ -112,9 +112,13 @@
                     <label class="text-xs font-bold uppercase tracking-wider text-slate-400">选择策略模型</label>
                     <div class="relative">
                         <select id="strategy-selector"
-                            onchange="document.getElementById('brick-params').classList.toggle('hidden', this.value !== 'brick')"
+                            onchange="document.getElementById('brick-params').classList.toggle('hidden', !['brick','annual94'].includes(this.value))"
                             class="w-full h-10 rounded-lg border border-slate-300 bg-white text-sm font-medium focus:ring-2 focus:ring-primary focus:border-transparent appearance-none px-3">
                             <option value="brick">超跌反弹</option>
+                            <option value="annual94">年化94</option>
+                            <option value="trend_surfer">趋势龙头</option>
+                            <option value="main_wave">主升浪启动</option>
+                            <option value="surge_relay">放量回踩续涨</option>
                             <option value="rsv">RSV超卖</option>
                             <option value="small_bank">小市值</option>
                             <option value="green_rebound">绿柱反弹 (MACD极限)</option>
@@ -159,6 +163,13 @@
                                     class="w-16 h-8 px-1 text-center text-sm rounded border border-slate-200 focus:ring-1 focus:ring-primary outline-none text-slate-700">
                                 <span class="text-slate-400 invisible">日</span>
                             </div>
+                        </div>
+                    </div>
+
+                    <div id="trend-surfer-tip" class="mt-2 hidden rounded-lg border border-blue-100 bg-blue-50/70 p-3">
+                        <div class="text-xs font-bold text-blue-700 mb-1">趋势龙头默认参数</div>
+                        <div class="text-[11px] leading-5 text-slate-600">
+                            自动载入近5年优化组合：`10/30/90` 均线、`30/15` 突破窗口、最低成交额 `5000万`、排除科创板。
                         </div>
                     </div>
                 </div>
@@ -375,10 +386,32 @@
             const logConsole = document.getElementById('log-console');
             const logLines = document.getElementById('log-lines');
             const logProgress = document.getElementById('log-progress');
+            const strategySelector = document.getElementById('strategy-selector');
+            const brickParams = document.getElementById('brick-params');
+            const trendTip = document.getElementById('trend-surfer-tip');
 
             let klineChart = null;
             let currentStocks = [];
             let currentSortMode = { key: 'score', desc: true };
+
+            function applyTrendDefaults() {
+                document.getElementById('exclude-st').checked = true;
+                document.getElementById('exclude-kc').checked = true;
+                document.getElementById('exclude-cy').checked = false;
+                document.getElementById('exclude-bse').checked = true;
+            }
+
+            function refreshStrategyPanels(strategy) {
+                brickParams.classList.toggle('hidden', !['brick', 'annual94'].includes(strategy));
+                trendTip.classList.toggle('hidden', strategy !== 'trend_surfer');
+                if (strategy === 'trend_surfer' || strategy === 'main_wave' || strategy === 'surge_relay') {
+                    applyTrendDefaults();
+                }
+            }
+
+            strategySelector.addEventListener('change', () => {
+                refreshStrategyPanels(strategySelector.value);
+            });
 
             async function toggleSort(key) {
                 if (currentSortMode.key === key) {
@@ -754,7 +787,7 @@
                 if (document.getElementById('exclude-cy').checked) excludes.push('cy');
                 if (document.getElementById('exclude-bse').checked) excludes.push('bse');
 
-                if (strategy === 'brick') {
+                if (strategy === 'brick' || strategy === 'annual94') {
                     const maShort = document.getElementById('brick-ma-short').value || 5;
                     const belowDays = document.getElementById('brick-below-days').value || 5;
                     const explosivePower = document.getElementById('brick-power').value || 1.0;
@@ -764,6 +797,77 @@
                     excludes.push(`brick_below_days:${belowDays}`);
                     excludes.push(`brick_power:${explosivePower}`);
                     excludes.push(`brick_kdj_limit:${kdjLimit}`);
+                } else if (strategy === 'trend_surfer') {
+                    excludes.push('suspended');
+                    excludes.push('lowprice:4');
+                    excludes.push('highprice:160');
+                    excludes.push('lowvol:5000');
+                    excludes.push('mktcap_min:20');
+                    excludes.push('mktcap_max:1000');
+                    excludes.push('new:180');
+                    excludes.push('trend_fast_ma:10');
+                    excludes.push('trend_mid_ma:30');
+                    excludes.push('trend_slow_ma:90');
+                    excludes.push('trend_breakout_days:30');
+                    excludes.push('trend_strong_days:15');
+                    excludes.push('trend_short_mom_min:0.08');
+                    excludes.push('trend_long_mom_min:0.15');
+                    excludes.push('trend_volume_mult:1.0');
+                    excludes.push('trend_volume_window:10');
+                    excludes.push('trend_up_down_ratio:1.0');
+                    excludes.push('trend_pullback_volume_max:0.9');
+                    excludes.push('trend_breakout_buffer:0.0');
+                    excludes.push('trend_gap_limit:5.0');
+                    excludes.push('trend_fast_exit_drawdown:0.0');
+                    excludes.push('trend_trail_profit_trigger:20.0');
+                    excludes.push('trend_trail_drawdown:10.0');
+                    excludes.push('trend_take_profit:50.0');
+                    excludes.push('trend_stop_loss:5.0');
+                    excludes.push('trend_max_hold_days:45');
+                } else if (strategy === 'main_wave') {
+                    excludes.push('suspended');
+                    excludes.push('lowprice:4');
+                    excludes.push('highprice:160');
+                    excludes.push('new:180');
+                    excludes.push('main_base_ma:10');
+                    excludes.push('main_trend_ma:20');
+                    excludes.push('main_anchor_ma:60');
+                    excludes.push('main_breakout_days:20');
+                    excludes.push('main_setup_days:18');
+                    excludes.push('main_volume_window:5');
+                    excludes.push('main_breakout_buffer:0.0');
+                    excludes.push('main_volume_mult:1.1');
+                    excludes.push('main_close_strength:0.4');
+                    excludes.push('main_pullback_limit:0.18');
+                    excludes.push('main_tight_range_limit:0.4');
+                    excludes.push('main_short_mom_min:0.0');
+                    excludes.push('main_long_mom_min:0.03');
+                    excludes.push('main_gap_limit:5.0');
+                    excludes.push('main_take_profit:35.0');
+                    excludes.push('main_stop_loss:7.0');
+                    excludes.push('main_trail_trigger:15.0');
+                    excludes.push('main_trail_drawdown:7.0');
+                    excludes.push('main_max_hold_days:30');
+                } else if (strategy === 'surge_relay') {
+                    excludes.push('suspended');
+                    excludes.push('highprice:160');
+                    excludes.push('new:120');
+                    excludes.push('relay_day1_min_pct:3.0');
+                    excludes.push('relay_day1_max_pct:9.8');
+                    excludes.push('relay_day1_vol_mult:1.05');
+                    excludes.push('relay_day2_max_drop:10.0');
+                    excludes.push('relay_day2_vol_ratio_max:0.8');
+                    excludes.push('relay_day2_close_floor:0.90');
+                    excludes.push('relay_day3_min_pct:2.5');
+                    excludes.push('relay_day3_vol_ratio_min:1.15');
+                    excludes.push('relay_day3_close_strength:0.55');
+                    excludes.push('relay_day3_close_floor:0.975');
+                    excludes.push('relay_day3_high_floor:0.965');
+                    excludes.push('relay_day3_break_high:-3.5');
+                    excludes.push('relay_gap_limit:4.0');
+                    excludes.push('relay_take_profit:12.0');
+                    excludes.push('relay_stop_loss:5.0');
+                    excludes.push('relay_max_hold_days:8');
                 }
 
                 // UI Init
@@ -913,8 +1017,8 @@
                         document.getElementById('target-date').value = parsed.date;
                         document.getElementById('strategy-selector').value = parsed.strategy;
 
-                        document.getElementById('brick-params').classList.toggle('hidden', parsed.strategy !== 'brick');
-                        if (parsed.strategy === 'brick' && parsed.brickParams) {
+                        refreshStrategyPanels(parsed.strategy);
+                        if (['brick', 'annual94'].includes(parsed.strategy) && parsed.brickParams) {
                             document.getElementById('brick-ma-short').value = parsed.brickParams.maShort || 5;
                             document.getElementById('brick-below-days').value = parsed.brickParams.belowDays || 5;
                             document.getElementById('brick-power').value = parsed.brickParams.explosivePower || 1.0;
@@ -933,6 +1037,7 @@
                 const d = new Date();
                 d.setDate(d.getDate() - 1);
                 document.getElementById('target-date').value = d.toISOString().split('T')[0];
+                refreshStrategyPanels(strategySelector.value);
 
                 resultInfo.textContent = "系统就绪，请选择日期和策略后点击“开始选股”";
             });
