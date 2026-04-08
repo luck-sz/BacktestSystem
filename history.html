@@ -70,16 +70,6 @@
             color: #b45309;
         }
 
-        .badge-annual94 {
-            background: #fee2e2;
-            color: #b91c1c;
-        }
-
-        .badge-small_bank {
-            background: #d1fae5;
-            color: #065f46;
-        }
-
         .badge-other {
             background: #f1f5f9;
             color: #475569;
@@ -224,8 +214,6 @@
                         <option value="">全部策略</option>
                         <option value="rsv">RSV超卖</option>
                         <option value="brick">超跌反弹</option>
-                        <option value="annual94">年化94</option>
-                        <option value="small_bank">小市值</option>
                     </select>
                 </div>
 
@@ -340,7 +328,7 @@
 
         // ─── 表格渲染 ────────────────────────────────────────────
         function badgeClass(strategy) {
-            const map = { rsv: 'badge-rsv', brick: 'badge-brick', annual94: 'badge-annual94', small_bank: 'badge-small_bank' };
+            const map = { rsv: 'badge-rsv', brick: 'badge-brick' };
             return map[strategy] || 'badge-other';
         }
         function colorClass(val) {

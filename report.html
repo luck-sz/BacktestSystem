@@ -187,7 +187,7 @@
 
         // 策略名映射
         const STRATEGY_NAMES = {
-            rsv: 'RSV超卖', brick: '超跌反弹', annual94: '年化94', small_bank: '小市值', trend_surfer: '趋势龙头', green_rebound: '绿柱反弹'
+            rsv: 'RSV超卖', brick: '超跌反弹', trend_surfer: '趋势龙头', surge_relay: '放量回踩续涨'
         };
 
         function parseExcludeToParameters(strategy, initialCapital, maxPositions, excludeStr) {
@@ -226,7 +226,7 @@
                 const parts = item.split(':');
                 const key = parts[0];
                 const value = parts.length > 1 ? parts.slice(1).join(':') : null;
-                if ((strategy === 'brick' || strategy === 'annual94') && brickLabels[key] && value !== null) {
+                if (strategy === 'brick' && brickLabels[key] && value !== null) {
                     parameters.strategy_params[key] = {
                         label: brickLabels[key][0],
                         value: value,
@@ -335,7 +335,7 @@
                 window._initialCapital = parseFloat(initialCapitalStr);
             }
             const initialCapital = window._initialCapital || 100000;
-            const maxPositions = params.get('max_positions') || ((strategy === 'rsv' || strategy === 'brick' || strategy === 'annual94') ? '2' : '5');
+            const maxPositions = params.get('max_positions') || ((strategy === 'rsv' || strategy === 'brick') ? '2' : '5');
             renderParamsPanel(
                 parseExcludeToParameters(strategy, initialCapital, maxPositions, params.get('exclude') || ''),
                 { source: 'backtest' }

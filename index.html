@@ -108,16 +108,12 @@
                     <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">选择策略模型</label>
                     <div class="relative">
                         <select id="strategy-selector"
-                            onchange="document.getElementById('brick-params').classList.toggle('hidden', !['brick','annual94'].includes(this.value))"
+                            onchange="document.getElementById('brick-params').classList.toggle('hidden', this.value !== 'brick')"
                             class="w-full rounded-lg border border-slate-300 bg-white text-text-main text-sm h-10 pl-3 pr-10 focus:ring-2 focus:ring-primary focus:border-transparent appearance-none shadow-sm bg-none font-medium">
                             <option value="brick">超跌反弹</option>
-                            <option value="annual94">年化94</option>
                             <option value="trend_surfer">趋势龙头</option>
-                            <option value="main_wave">主升浪启动</option>
                             <option value="surge_relay">放量回踩续涨</option>
                             <option value="rsv">RSV超卖</option>
-                            <option value="small_bank">小市值</option>
-                            <option value="green_rebound">绿柱反弹 (MACD极限)</option>
                         </select>
                         <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
                             <span class="material-symbols-outlined text-sm">expand_more</span>
@@ -499,91 +495,11 @@
                     </div>
                 </div>
 
-                <!-- 小市值+银行轮动 策略参数配置面版 -->
-                <div id="strategy-params-small_bank" style="display: none;" class="flex flex-col gap-6">
-                    <div class="flex flex-col gap-2">
-                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">策略参数</label>
-                        <div class="space-y-2">
-                            <details class="group rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
-                                open="">
-                                <summary
-                                    class="flex cursor-pointer items-center justify-between px-3 py-2 select-none hover:bg-slate-100 transition-colors">
-                                    <span class="text-sm font-medium text-slate-700">常规小市值设置</span>
-                                    <span
-                                        class="material-symbols-outlined text-slate-400 text-sm group-open:rotate-180 transition-transform">expand_more</span>
-                                </summary>
-                                <div class="px-3 pb-3 pt-1 border-t border-slate-200 border-dashed bg-white">
-                                    <div class="flex gap-2 items-center justify-between mt-2">
-                                        <label
-                                            class="text-xs text-slate-700 font-bold whitespace-nowrap">持仓上限(只)</label>
-                                        <input id="max-positions-small_bank"
-                                            class="w-16 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700 font-bold"
-                                            type="number" value="7" />
-                                    </div>
-                                    <div class="mt-3 text-[11px] text-slate-500">过滤科创/创业/北交所及次新股</div>
-                                </div>
-                            </details>
-                            <details class="group rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
-                                open="">
-                                <summary
-                                    class="flex cursor-pointer items-center justify-between px-3 py-2 select-none hover:bg-slate-100 transition-colors">
-                                    <span class="text-sm font-medium text-slate-700">银行轮动防御机制</span>
-                                    <span
-                                        class="material-symbols-outlined text-slate-400 text-sm group-open:rotate-180 transition-transform">expand_more</span>
-                                </summary>
-                                <div class="px-3 pb-3 pt-2 border-t border-slate-200 border-dashed bg-white">
-                                    <span class="text-[11px] text-slate-500 leading-tight">每年 12.15~01.30 及 04.04~04.28
-                                        期间，强制清仓小市值股票，全仓轮动三大行（工、农、中），规避年报/一季报暴雷风险。</span>
-                                </div>
-                            </details>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 绿柱反弹 策略参数配置面版 -->
-                <div id="strategy-params-green_rebound" style="display: none;" class="flex flex-col gap-6">
-                    <div class="flex flex-col gap-2">
-                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">策略设置</label>
-                        <div class="space-y-2">
-                            <details class="group rounded-lg border border-slate-200 bg-slate-50 overflow-hidden"
-                                open="">
-                                <summary
-                                    class="flex cursor-pointer items-center justify-between px-3 py-2 select-none hover:bg-slate-100 transition-colors">
-                                    <span class="text-sm font-medium text-slate-700">基础参数</span>
-                                    <span
-                                        class="material-symbols-outlined text-slate-400 text-sm group-open:rotate-180 transition-transform">expand_more</span>
-                                </summary>
-                                <div class="px-3 pb-3 pt-2 border-t border-slate-200 border-dashed bg-white">
-                                    <div class="flex gap-2 items-center justify-between mt-2">
-                                        <label
-                                            class="text-xs text-slate-700 font-bold whitespace-nowrap">持仓上限(只)</label>
-                                        <input id="max-positions-green_rebound"
-                                            class="w-16 h-7 rounded border border-slate-300 bg-white text-center text-xs focus:ring-1 focus:ring-primary text-slate-700 font-bold"
-                                            type="number" value="5" />
-                                        <div class="mt-3 text-[11px] text-slate-500">基于砖型指标动能收缩，结合 KDJ
-                                            超跌拐头（J&lt;0且向上）且收盘价站上 60 日线。</div>
-                                    </div>
-                            </details>
-                        </div>
-                    </div>
-                    <div class="flex flex-col gap-3">
-                        <label class="text-xs font-semibold uppercase tracking-wider text-text-muted">交易执行与目标</label>
-                        <div class="p-3 rounded-lg bg-primary/5 border border-primary/20 shadow-sm">
-                            <ul class="text-xs text-slate-700 space-y-2 list-disc list-inside">
-                                <li><strong>买入时机：</strong> T+1日 开盘等权买入</li>
-                                <li><strong>卖出逻辑：</strong> 遇到5%止盈/止损或者持仓满4天无条件清仓</li>
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-
                 <script>
                     const selector = document.getElementById('strategy-selector');
                     const paramsRSV = document.getElementById('strategy-params-rsv');
                     const paramsBrick = document.getElementById('strategy-params-brick');
                     const paramsTrend = document.getElementById('strategy-params-trend_surfer');
-                    const paramsSmallBank = document.getElementById('strategy-params-small_bank');
-                    const paramsGreenRebound = document.getElementById('strategy-params-green_rebound');
                     const titleText = document.getElementById('strategy-title');
                     const descText = document.getElementById('strategy-desc');
 
@@ -608,24 +524,6 @@
                         });
                     }
 
-                    function applyMainWaveDefaults() {
-                        document.getElementById('exclude-st').checked = true;
-                        document.getElementById('exclude-kc').checked = true;
-                        document.getElementById('exclude-cy').checked = false;
-                        document.getElementById('exclude-bse').checked = true;
-                        document.getElementById('exclude-lowprice').checked = true;
-                        document.getElementById('lowprice-threshold').value = '4';
-                        document.getElementById('exclude-highprice').checked = true;
-                        document.getElementById('highprice-threshold').value = '160';
-                        document.getElementById('exclude-suspended').checked = true;
-                        document.getElementById('exclude-lowvol').checked = false;
-                        document.getElementById('exclude-mktcap-min').checked = false;
-                        document.getElementById('exclude-mktcap-max').checked = false;
-                        document.querySelectorAll('.board-pill input[type="checkbox"]').forEach(input => {
-                            input.dispatchEvent(new Event('change'));
-                        });
-                    }
-
                     function applyRelayDefaults() {
                         document.getElementById('exclude-st').checked = true;
                         document.getElementById('exclude-kc').checked = true;
@@ -644,56 +542,23 @@
                     }
 
                     selector.addEventListener('change', function () {
-                        if (this.value === 'brick' || this.value === 'annual94') {
+                        if (this.value === 'brick') {
                             paramsRSV.style.display = 'none';
                             paramsBrick.style.display = 'flex';
                             paramsTrend.style.display = 'none';
-                            paramsSmallBank.style.display = 'none';
-                            paramsGreenRebound.style.display = 'none';
-                            titleText.textContent = this.value === 'annual94' ? '年化94' : '超跌反弹';
-                            descText.textContent = this.value === 'annual94'
-                                ? '优化后的波段版超跌反弹策略，默认追求更高年化收益'
-                                : 'KDJ深水超卖+突破MA60趋势的多因子共振短线策略';
-                        } else if (this.value === 'small_bank') {
-                            paramsRSV.style.display = 'none';
-                            paramsBrick.style.display = 'none';
-                            paramsTrend.style.display = 'none';
-                            paramsSmallBank.style.display = 'flex';
-                            paramsGreenRebound.style.display = 'none';
-                            titleText.textContent = '小市值';
-                            descText.textContent = '避开财报季暴雷配置三大行，其余时间做量价优选小市值';
-                        } else if (this.value === 'green_rebound') {
-                            paramsRSV.style.display = 'none';
-                            paramsBrick.style.display = 'none';
-                            paramsTrend.style.display = 'none';
-                            paramsSmallBank.style.display = 'none';
-                            paramsGreenRebound.style.display = 'flex';
-                            titleText.textContent = '绿柱反弹';
-                            descText.textContent = 'MACD绿色柱子极度缩窄时的左侧右切点预判买入策略';
+                            titleText.textContent = '超跌反弹';
+                            descText.textContent = 'KDJ深水超卖+突破MA60趋势的多因子共振短线策略';
                         } else if (this.value === 'trend_surfer') {
                             paramsRSV.style.display = 'none';
                             paramsBrick.style.display = 'none';
                             paramsTrend.style.display = 'flex';
-                            paramsSmallBank.style.display = 'none';
-                            paramsGreenRebound.style.display = 'none';
                             titleText.textContent = '趋势龙头';
                             descText.textContent = '使用近5年优化后的趋势突破参数，主抓主升段并强化止盈回撤保护';
                             applyTrendDefaults();
-                        } else if (this.value === 'main_wave') {
-                            paramsRSV.style.display = 'none';
-                            paramsBrick.style.display = 'none';
-                            paramsTrend.style.display = 'none';
-                            paramsSmallBank.style.display = 'none';
-                            paramsGreenRebound.style.display = 'none';
-                            titleText.textContent = '主升浪启动';
-                            descText.textContent = '识别平台蓄势后的放量突破，捕捉主升浪初段启动点';
-                            applyMainWaveDefaults();
                         } else if (this.value === 'surge_relay') {
                             paramsRSV.style.display = 'none';
                             paramsBrick.style.display = 'none';
                             paramsTrend.style.display = 'none';
-                            paramsSmallBank.style.display = 'none';
-                            paramsGreenRebound.style.display = 'none';
                             titleText.textContent = '放量回踩续涨';
                             descText.textContent = '识别上涨首板块后缩量回踩，再次放量续涨的三日启动结构';
                             applyRelayDefaults();
@@ -701,8 +566,6 @@
                             paramsRSV.style.display = 'flex';
                             paramsBrick.style.display = 'none';
                             paramsTrend.style.display = 'none';
-                            paramsSmallBank.style.display = 'none';
-                            paramsGreenRebound.style.display = 'none';
                             titleText.textContent = 'RSV超卖';
                             descText.textContent = '捕捉底背离及缩量的超跌反弹短线策略';
                         }
@@ -1006,16 +869,10 @@
                     maxPositions = document.getElementById('max-positions-rsv').value || '2';
                 } else if (strategy === 'trend_surfer') {
                     maxPositions = document.getElementById('max-positions-trend_surfer').value || '1';
-                } else if (strategy === 'main_wave') {
-                    maxPositions = '2';
                 } else if (strategy === 'surge_relay') {
                     maxPositions = '3';
-                } else if (strategy === 'brick' || strategy === 'annual94') {
+                } else if (strategy === 'brick') {
                     maxPositions = document.getElementById('max-positions-brick').value || '2';
-                } else if (strategy === 'small_bank') {
-                    maxPositions = document.getElementById('max-positions-small_bank').value || '7';
-                } else if (strategy === 'green_rebound') {
-                    maxPositions = document.getElementById('max-positions-green_rebound').value || '5';
                 }
 
                 // 收集所有排除条件
@@ -1057,34 +914,19 @@
 
                 // 新增：如果当前策略是 brick，自动追加自定义参数
                 let finalExcludeStr = excludeStr;
-                if (strategy === 'brick' || strategy === 'annual94') {
+                if (strategy === 'brick') {
                     let brickParams = '';
-                    if (strategy === 'annual94') {
-                        brickParams = [
-                            'brick_ma_short:6',
-                            'brick_ma_long:40',
-                            'brick_below_days:5',
-                            'brick_callback:1.0',
-                            'brick_power:1.0',
-                            'brick_kdj_limit:0',
-                            'brick_gap_limit:0.3',
-                            'brick_take_profit:12',
-                            'brick_stop_loss:6',
-                            'brick_max_hold_days:10'
-                        ].join(',');
-                    } else {
-                        const maShort = document.getElementById('brick-ma-short').value || 5;
-                        const belowDays = document.getElementById('brick-below-days').value || 5;
-                        const explosivePower = document.getElementById('brick-power').value || 1.0;
-                        const kdjLimit = document.getElementById('brick-kdj-limit').value || 0.0;
+                    const maShort = document.getElementById('brick-ma-short').value || 5;
+                    const belowDays = document.getElementById('brick-below-days').value || 5;
+                    const explosivePower = document.getElementById('brick-power').value || 1.0;
+                    const kdjLimit = document.getElementById('brick-kdj-limit').value || 0.0;
 
-                        brickParams = [
-                            `brick_ma_short:${maShort}`,
-                            `brick_below_days:${belowDays}`,
-                            `brick_power:${explosivePower}`,
-                            `brick_kdj_limit:${kdjLimit}`
-                        ].join(',');
-                    }
+                    brickParams = [
+                        `brick_ma_short:${maShort}`,
+                        `brick_below_days:${belowDays}`,
+                        `brick_power:${explosivePower}`,
+                        `brick_kdj_limit:${kdjLimit}`
+                    ].join(',');
                     finalExcludeStr = finalExcludeStr ? `${finalExcludeStr},${brickParams}` : brickParams;
                 } else if (strategy === 'trend_surfer') {
                     const trendParams = [
@@ -1110,30 +952,6 @@
                         `trend_max_hold_days:${document.getElementById('trend-max-hold-days').value || 45}`
                     ].join(',');
                     finalExcludeStr = finalExcludeStr ? `${finalExcludeStr},${trendParams}` : trendParams;
-                } else if (strategy === 'main_wave') {
-                    const mainWaveParams = [
-                        'new:180',
-                        'main_base_ma:10',
-                        'main_trend_ma:20',
-                        'main_anchor_ma:60',
-                        'main_breakout_days:20',
-                        'main_setup_days:18',
-                        'main_volume_window:5',
-                        'main_breakout_buffer:0.0',
-                        'main_volume_mult:1.1',
-                        'main_close_strength:0.4',
-                        'main_pullback_limit:0.18',
-                        'main_tight_range_limit:0.4',
-                        'main_short_mom_min:0.0',
-                        'main_long_mom_min:0.03',
-                        'main_gap_limit:5.0',
-                        'main_take_profit:35.0',
-                        'main_stop_loss:7.0',
-                        'main_trail_trigger:15.0',
-                        'main_trail_drawdown:7.0',
-                        'main_max_hold_days:30'
-                    ].join(',');
-                    finalExcludeStr = finalExcludeStr ? `${finalExcludeStr},${mainWaveParams}` : mainWaveParams;
                 } else if (strategy === 'surge_relay') {
                     const relayParams = [
                         'new:120',

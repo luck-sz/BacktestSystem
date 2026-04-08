@@ -112,16 +112,12 @@
                     <label class="text-xs font-bold uppercase tracking-wider text-slate-400">选择策略模型</label>
                     <div class="relative">
                         <select id="strategy-selector"
-                            onchange="document.getElementById('brick-params').classList.toggle('hidden', !['brick','annual94'].includes(this.value))"
+                            onchange="document.getElementById('brick-params').classList.toggle('hidden', this.value !== 'brick')"
                             class="w-full h-10 rounded-lg border border-slate-300 bg-white text-sm font-medium focus:ring-2 focus:ring-primary focus:border-transparent appearance-none px-3">
                             <option value="brick">超跌反弹</option>
-                            <option value="annual94">年化94</option>
                             <option value="trend_surfer">趋势龙头</option>
-                            <option value="main_wave">主升浪启动</option>
                             <option value="surge_relay">放量回踩续涨</option>
                             <option value="rsv">RSV超卖</option>
-                            <option value="small_bank">小市值</option>
-                            <option value="green_rebound">绿柱反弹 (MACD极限)</option>
                         </select>
                         <div
                             class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 flex items-center">
@@ -402,9 +398,9 @@
             }
 
             function refreshStrategyPanels(strategy) {
-                brickParams.classList.toggle('hidden', !['brick', 'annual94'].includes(strategy));
+                brickParams.classList.toggle('hidden', strategy !== 'brick');
                 trendTip.classList.toggle('hidden', strategy !== 'trend_surfer');
-                if (strategy === 'trend_surfer' || strategy === 'main_wave' || strategy === 'surge_relay') {
+                if (strategy === 'trend_surfer' || strategy === 'surge_relay') {
                     applyTrendDefaults();
                 }
             }
@@ -787,7 +783,7 @@
                 if (document.getElementById('exclude-cy').checked) excludes.push('cy');
                 if (document.getElementById('exclude-bse').checked) excludes.push('bse');
 
-                if (strategy === 'brick' || strategy === 'annual94') {
+                if (strategy === 'brick') {
                     const maShort = document.getElementById('brick-ma-short').value || 5;
                     const belowDays = document.getElementById('brick-below-days').value || 5;
                     const explosivePower = document.getElementById('brick-power').value || 1.0;
@@ -824,30 +820,6 @@
                     excludes.push('trend_take_profit:50.0');
                     excludes.push('trend_stop_loss:5.0');
                     excludes.push('trend_max_hold_days:45');
-                } else if (strategy === 'main_wave') {
-                    excludes.push('suspended');
-                    excludes.push('lowprice:4');
-                    excludes.push('highprice:160');
-                    excludes.push('new:180');
-                    excludes.push('main_base_ma:10');
-                    excludes.push('main_trend_ma:20');
-                    excludes.push('main_anchor_ma:60');
-                    excludes.push('main_breakout_days:20');
-                    excludes.push('main_setup_days:18');
-                    excludes.push('main_volume_window:5');
-                    excludes.push('main_breakout_buffer:0.0');
-                    excludes.push('main_volume_mult:1.1');
-                    excludes.push('main_close_strength:0.4');
-                    excludes.push('main_pullback_limit:0.18');
-                    excludes.push('main_tight_range_limit:0.4');
-                    excludes.push('main_short_mom_min:0.0');
-                    excludes.push('main_long_mom_min:0.03');
-                    excludes.push('main_gap_limit:5.0');
-                    excludes.push('main_take_profit:35.0');
-                    excludes.push('main_stop_loss:7.0');
-                    excludes.push('main_trail_trigger:15.0');
-                    excludes.push('main_trail_drawdown:7.0');
-                    excludes.push('main_max_hold_days:30');
                 } else if (strategy === 'surge_relay') {
                     excludes.push('suspended');
                     excludes.push('highprice:160');
@@ -1018,7 +990,7 @@
                         document.getElementById('strategy-selector').value = parsed.strategy;
 
                         refreshStrategyPanels(parsed.strategy);
-                        if (['brick', 'annual94'].includes(parsed.strategy) && parsed.brickParams) {
+                        if (parsed.strategy === 'brick' && parsed.brickParams) {
                             document.getElementById('brick-ma-short').value = parsed.brickParams.maShort || 5;
                             document.getElementById('brick-below-days').value = parsed.brickParams.belowDays || 5;
                             document.getElementById('brick-power').value = parsed.brickParams.explosivePower || 1.0;

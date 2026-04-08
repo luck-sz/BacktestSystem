@@ -71,19 +71,6 @@ STRATEGY_PARAM_LABELS = {
         "brick_stop_loss": ("止损", "%"),
         "brick_max_hold_days": ("最大持仓", "天"),
     },
-    "annual94": {
-        "brick_ma_short": ("短期均线", "日"),
-        "brick_ma_long": ("趋势均线", "日"),
-        "brick_below_days": ("低于短均线", "日"),
-        "brick_callback": ("回踩深度", "%"),
-        "brick_power": ("爆发力", "倍"),
-        "brick_kdj_limit": ("J值上限", ""),
-        "brick_gap_limit": ("次日高开限制", "%"),
-        "brick_breakout_buffer": ("突破缓冲", "%"),
-        "brick_take_profit": ("止盈", "%"),
-        "brick_stop_loss": ("止损", "%"),
-        "brick_max_hold_days": ("最大持仓", "天"),
-    },
     "trend_surfer": {
         "trend_fast_ma": ("快线", "日"),
         "trend_mid_ma": ("中线", "日"),
@@ -104,27 +91,6 @@ STRATEGY_PARAM_LABELS = {
         "trend_take_profit": ("止盈", "%"),
         "trend_stop_loss": ("止损", "%"),
         "trend_max_hold_days": ("最大持仓", "天"),
-    },
-    "main_wave": {
-        "main_base_ma": ("启动均线", "日"),
-        "main_trend_ma": ("趋势均线", "日"),
-        "main_anchor_ma": ("锚定均线", "日"),
-        "main_breakout_days": ("突破周期", "日"),
-        "main_setup_days": ("蓄势窗口", "日"),
-        "main_volume_window": ("量能窗口", "日"),
-        "main_breakout_buffer": ("突破缓冲", "%"),
-        "main_volume_mult": ("放量倍数", "倍"),
-        "main_close_strength": ("收盘强度", ""),
-        "main_pullback_limit": ("回撤上限", ""),
-        "main_tight_range_limit": ("平台宽度", ""),
-        "main_short_mom_min": ("20日动量", ""),
-        "main_long_mom_min": ("60日动量", ""),
-        "main_gap_limit": ("次日高开限制", "%"),
-        "main_take_profit": ("止盈", "%"),
-        "main_stop_loss": ("止损", "%"),
-        "main_trail_trigger": ("回撤保护触发", "%"),
-        "main_trail_drawdown": ("盈利回撤保护", "%"),
-        "main_max_hold_days": ("最大持仓", "天"),
     },
     "surge_relay": {
         "relay_day1_min_pct": ("首日涨幅下限", "%"),
@@ -522,9 +488,7 @@ async def start_backtest(request: Request):
         "rsv": 2,
         "ma": 5,
         "brick": 2,
-        "annual94": 2,
         "trend_surfer": 2,
-        "main_wave": 2,
         "surge_relay": 3,
     }
     try:
@@ -792,12 +756,10 @@ async def api_start_parameter_sweep(request: Request):
 
     try:
         max_positions = int(
-            p.get(
-                "max_positions", {"brick": 2, "annual94": 2, "rsv": 2}.get(strategy, 5)
-            )
+            p.get("max_positions", {"brick": 2, "rsv": 2}.get(strategy, 5))
         )
     except (ValueError, TypeError):
-        max_positions = {"brick": 2, "annual94": 2, "rsv": 2}.get(strategy, 5)
+        max_positions = {"brick": 2, "rsv": 2}.get(strategy, 5)
 
     exclude_boards = _normalize_exclude_value(p.get("exclude", ""))
     try:
