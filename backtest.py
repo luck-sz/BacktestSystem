@@ -394,17 +394,11 @@ def _calc_surge_relay(
     df: pd.DataFrame, exclude_boards: Optional[list[str]] = None
 ) -> pd.DataFrame:
     """三日放量回踩续涨：阳线走强 -> 阴线回踩 -> 阳线放量续涨"""
-    exclude_boards = exclude_boards or []
     df["ma5"] = df["close"].rolling(5).mean()
 
-    prev_vol = df["volume"].shift(3)
     day1_vol = df["volume"].shift(2)
     day2_vol = df["volume"].shift(1)
     day3_vol = df["volume"]
-
-    day1_pct = df["pct_chg"].shift(2)
-    day2_pct = df["pct_chg"].shift(1)
-    day3_pct = df["pct_chg"]
 
     prev_close_day1 = df["close"].shift(3)
     prev_close_day2 = df["close"].shift(2)
@@ -416,8 +410,6 @@ def _calc_surge_relay(
     day1_open = df["open"].shift(2)
     day2_open = df["open"].shift(1)
 
-    day3_range = (df["high"] - df["low"]).replace(0, np.nan)
-    day3_close_pos = (df["close"] - df["low"]) / day3_range
     three_day_vol = day1_vol + day2_vol + day3_vol
     day2_vol_share = (day2_vol / three_day_vol.replace(0, np.nan)).fillna(1)
 
