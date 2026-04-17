@@ -393,13 +393,9 @@ def _calc_trend_surfer(
 def _calc_surge_relay(
     df: pd.DataFrame, exclude_boards: Optional[list[str]] = None
 ) -> pd.DataFrame:
-    """三日放量启动：上涨 -> 缩量回踩 -> 放量续涨"""
+    """三日放量回踩续涨：阳线走强 -> 阴线回踩 -> 阳线放量续涨"""
     exclude_boards = exclude_boards or []
     df["ma5"] = df["close"].rolling(5).mean()
-    df["ma10"] = df["close"].rolling(10).mean()
-    df["avg_turnover20"] = (
-        (df["close"] * df["volume"]).rolling(20, min_periods=1).mean()
-    )
 
     prev_vol = df["volume"].shift(3)
     day1_vol = df["volume"].shift(2)
@@ -410,35 +406,36 @@ def _calc_surge_relay(
     day2_pct = df["pct_chg"].shift(1)
     day3_pct = df["pct_chg"]
 
+    prev_close_day1 = df["close"].shift(3)
+    prev_close_day2 = df["close"].shift(2)
+    prev_close_day3 = df["close"].shift(1)
+
     day1_close = df["close"].shift(2)
     day2_close = df["close"].shift(1)
     day3_close = df["close"]
     day1_open = df["open"].shift(2)
     day2_open = df["open"].shift(1)
-    day1_high = df["high"].shift(2)
-    day3_high = df["high"]
 
     day3_range = (df["high"] - df["low"]).replace(0, np.nan)
     day3_close_pos = (df["close"] - df["low"]) / day3_range
+    three_day_vol = day1_vol + day2_vol + day3_vol
+    day2_vol_share = (day2_vol / three_day_vol.replace(0, np.nan)).fillna(1)
 
-    cond_day1 = (day1_pct > 0) & (day1_close > day1_open)
-    cond_day2 = (day2_close < day2_open) & (day2_vol < day1_vol)
-    cond_day3 = (day3_pct > 0) & (day3_vol > day2_vol)
-    trend_ok = (
-        (day1_close >= df["ma5"].shift(2))
-        & (day2_close >= df["ma5"].shift(1))
-        & (day3_close >= df["ma5"])
+    cond_day1 = (day1_close > day1_open) & (day1_close > prev_close_day1)
+    cond_day2 = (
+        (day2_close < day2_open)
+        & (day2_close < prev_close_day2)
+        & (day2_vol < day1_vol)
+    )
+    cond_day3 = (
+        (day3_close > df["open"])
+        & (day3_close > prev_close_day3)
+        & (day3_vol > day1_vol)
+        & (day3_close > df["ma5"])
     )
 
-    df["buy_signal"] = cond_day1 & cond_day2 & cond_day3 & trend_ok
-    df["relay_score"] = (
-        day1_pct.fillna(0) * 1.6
-        + day3_pct.fillna(0) * 2.4
-        + (day1_vol / prev_vol.replace(0, np.nan)).fillna(0) * 8
-        + (day3_vol / day2_vol.replace(0, np.nan)).fillna(0) * 10
-        + (1 + day2_pct.fillna(0) / 100.0) * 12
-        + day3_close_pos.fillna(0) * 10
-    )
+    df["buy_signal"] = cond_day1 & cond_day2 & cond_day3
+    df["relay_score"] = 1 - day2_vol_share
     df["relay_defense"] = df["low"].shift(1).rolling(3).min()
     return df
 
